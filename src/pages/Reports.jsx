@@ -23,6 +23,9 @@ export default function Reports() {
     const [showAddSize, setShowAddSize] = useState(false);
     const [newSizeName, setNewSizeName] = useState('');
     const [showAddColour, setShowAddColour] = useState(false);
+    
+    // Sort state for reports list
+    const [reportSortDir, setReportSortDir] = useState('az'); // 'az' or 'za'
 
     const [skuModal, setSkuModal] = useState({ show: false, finishIdx: -1, sizeIdx: -1, colour: '', selectedSkus: [] });
     const [skuSearchTerm, setSkuSearchTerm] = useState('');
@@ -569,7 +572,10 @@ export default function Reports() {
                 const inDate = toJsDate(inInt);
                 const endDate = toJsDate(endInt === 99999999 ? toDateInt(new Date().toISOString()) : endInt);
                 let diffDays = Math.max(1, (endDate - inDate) / (1000 * 60 * 60 * 24));
-                dailyAvg = cycleSalesSum / diffDays;
+                
+                const combinedSales = cycleSalesSum + (Number(inv.holding) || 0) + (Number(inv.so_qty) || 0);
+                dailyAvg = combinedSales / diffDays;
+                
                 sumDailyAvg += dailyAvg;
                 validSkuCount++;
             }
@@ -642,6 +648,18 @@ export default function Reports() {
         );
     };
 
+    const toggleReportSort = () => {
+        setReportSortDir(prev => prev === 'az' ? 'za' : 'az');
+    };
+
+    const sortedReports = [...reports].sort((a, b) => {
+        const nameA = (a.name || '').toLowerCase();
+        const nameB = (b.name || '').toLowerCase();
+        if (nameA < nameB) return reportSortDir === 'az' ? -1 : 1;
+        if (nameA > nameB) return reportSortDir === 'az' ? 1 : -1;
+        return 0;
+    });
+
     return (
         <div className="reports-layout">
             <div className="reports-sidebar">
@@ -649,12 +667,15 @@ export default function Reports() {
                     <button className="btn-upload btn-full" onClick={() => setShowAddReport(true)} style={{ marginBottom: '8px' }}>
                         <Plus size={18} /> New Report
                     </button>
-                    <button className="btn-upload btn-full" onClick={updateAllReports} disabled={savingReport} style={{ background: '#3b82f6', color: 'white', border: 'none' }}>
+                    <button className="btn-upload btn-full" onClick={updateAllReports} disabled={savingReport} style={{ background: '#3b82f6', color: 'white', border: 'none', marginBottom: '8px' }}>
                         <RefreshCw size={18} /> {savingReport ? 'Updating...' : 'Update All Reports'}
+                    </button>
+                    <button className="btn-upload btn-full" onClick={toggleReportSort} style={{ background: 'var(--surface-color)', color: 'var(--text-color)', border: '1px solid var(--border-color)' }}>
+                        Sort: {reportSortDir === 'az' ? 'A-Z' : 'Z-A'}
                     </button>
                 </div>
                 <div className="reports-list">
-                    {reports.map(r => (
+                    {sortedReports.map(r => (
                         <div
                             key={r.id}
                             className={`report-item ${activeReport?.id === r.id ? 'active' : ''}`}
