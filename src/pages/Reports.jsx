@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo } from 'react';
 import { getDb } from '../db/Database';
-import { Plus, Search, Trash2, Save, X, PlusCircle, Sparkles, Download, RefreshCw } from 'lucide-react';
+import { Plus, Search, Trash2, Save, X, PlusCircle, Sparkles, Download, RefreshCw, Printer } from 'lucide-react';
 import { save } from '@tauri-apps/plugin-dialog';
 import { writeTextFile } from '@tauri-apps/plugin-fs';
 import './Reports.css';
@@ -106,8 +106,8 @@ export default function Reports() {
         }
     };
 
-    const exportReportHTML = async () => {
-        if (!activeReport || !activeReport.data) return;
+    const generateReportHTML = (smallerFont = false) => {
+        if (!activeReport || !activeReport.data) return '';
 
         let htmlRows = '';
 
@@ -176,46 +176,71 @@ export default function Reports() {
                 });
             });
         });
+        
+        const fontSize = smallerFont ? '10px' : '13px';
+        const paddingSize = smallerFont ? '4px' : '10px';
+        const badgeSize = smallerFont ? '9px' : '11px';
 
-        const htmlContent = `
+        return `
 <!DOCTYPE html>
 <html>
 <head>
 <meta charset="utf-8">
 <title>${activeReport.name}</title>
 <style>
-    body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; padding: 20px; color: #1e293b; background: white; }
+    body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; padding: 20px; color: #1e293b; background: white; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
     h2 { margin-top: 0; color: #0f172a; margin-bottom: 20px; }
-    .report-table { width: 100%; border-collapse: collapse; font-size: 13px; }
-    .report-table th, .report-table td { border: 1px solid #cbd5e1; padding: 10px; text-align: center; }
+    .report-table { width: 100%; border-collapse: collapse; font-size: ${fontSize}; }
+    .report-table th, .report-table td { border: 1px solid #cbd5e1; padding: ${paddingSize}; text-align: center; }
     .report-table th { background: #f8fafc; font-weight: bold; color: #475569; }
     .finish-row { background: #e2e8f0; font-weight: bold; text-align: left; }
-    .sku-badge { background: #f1f5f9; padding: 2px 6px; border-radius: 4px; font-family: monospace; font-size: 11px; }
+    .sku-badge { background: #f1f5f9; padding: 2px 6px; border-radius: 4px; font-family: monospace; font-size: ${badgeSize}; }
     .num { font-family: monospace; }
+    @media print {
+        body { padding: 0; margin: 0; }
+        @page { size: portrait; margin: 0; }
+    }
 </style>
 </head>
 <body>
-    <h2>${activeReport.name} (Start: ${activeReport.start_date || 'N/A'} - End: ${activeReport.end_date || 'N/A'})</h2>
-    <table class="report-table">
-        <thead>
-            <tr>
-                <th style="width: 80px;">Size</th>
-                <th style="width: 80px;">Colour</th>
-                <th style="width: 150px;">SKU</th>
-                <th style="width: 100px;">In-date</th>
-                <th style="width: 80px;">Available</th>
-                <th style="width: 80px;">Order</th>
-                <th style="width: 80px;">Total</th>
-                <th style="width: 80px;">Sale</th>
-                <th style="width: 80px;">Cycle</th>
-            </tr>
+    <table style="width: 100%; border: none; border-collapse: collapse;">
+        <thead style="border: none;">
+            <tr><td style="height: 1.5cm; border: none; padding: 0;"></td></tr>
         </thead>
-        <tbody>
-            ${htmlRows}
+        <tfoot style="border: none;">
+            <tr><td style="height: 1.5cm; border: none; padding: 0;"></td></tr>
+        </tfoot>
+        <tbody style="border: none;">
+            <tr><td style="border: none; padding: 0 1.5cm;">
+                <h2>${activeReport.name} (Start: ${activeReport.start_date || 'N/A'} - End: ${activeReport.end_date || 'N/A'})</h2>
+                <table class="report-table">
+                    <thead>
+                        <tr>
+                            <th style="width: 80px;">Size</th>
+                            <th style="width: 80px;">Colour</th>
+                            <th style="width: 150px;">SKU</th>
+                            <th style="width: 100px;">In-date</th>
+                            <th style="width: 80px;">Available</th>
+                            <th style="width: 80px;">Order</th>
+                            <th style="width: 80px;">Total</th>
+                            <th style="width: 80px;">Sale</th>
+                            <th style="width: 80px;">Cycle</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        ${htmlRows}
+                    </tbody>
+                </table>
+            </td></tr>
         </tbody>
     </table>
 </body>
 </html>`;
+    };
+
+    const exportReportHTML = async () => {
+        const htmlContent = generateReportHTML(false);
+        if (!htmlContent) return;
 
         try {
             const filePath = await save({
@@ -229,6 +254,29 @@ export default function Reports() {
         } catch (err) {
             console.error("Export failed", err);
         }
+    };
+    
+    const printReport = () => {
+        const htmlContent = generateReportHTML(true);
+        if (!htmlContent) return;
+        
+        const iframe = document.createElement('iframe');
+        iframe.style.display = 'none';
+        document.body.appendChild(iframe);
+        
+        iframe.contentWindow.document.open();
+        iframe.contentWindow.document.write(htmlContent);
+        iframe.contentWindow.document.close();
+        
+        iframe.contentWindow.focus();
+        setTimeout(() => {
+            iframe.contentWindow.print();
+            setTimeout(() => {
+                if (document.body.contains(iframe)) {
+                    document.body.removeChild(iframe);
+                }
+            }, 1000);
+        }, 500);
     };
 
     const createNewReport = async (name) => {
@@ -715,15 +763,20 @@ export default function Reports() {
                             </div>
                             <div className="report-actions" style={{ display: 'flex', alignItems: 'center' }}>
                                 <span className="status-text" style={{ marginRight: '10px' }}>{savingReport ? 'Saving...' : ''}</span>
-                                <button className="btn-upload" onClick={autoGenerate}>
-                                    <Sparkles size={16} /> Auto Generate
-                                </button>
-                                <button className="btn-upload" onClick={exportReportHTML} style={{ background: '#3b82f6', color: 'white', border: 'none' }}>
-                                    <Download size={16} /> Export Report
-                                </button>
-                                <button className="btn-upload" onClick={saveReportData} disabled={savingReport}>
-                                    <Save size={16} /> Save Report
-                                </button>
+                                <div style={{ display: 'flex', gap: '8px' }}>
+                                    <button className="btn-upload" onClick={printReport} style={{ background: '#f8fafc', color: '#1e293b', border: '1px solid #cbd5e1' }}>
+                                        <Printer size={16} /> Print Report
+                                    </button>
+                                    <button className="btn-upload" onClick={exportReportHTML} style={{ background: '#f8fafc', color: '#1e293b', border: '1px solid #cbd5e1' }}>
+                                        <Download size={16} /> Export HTML
+                                    </button>
+                                    <button className="btn-upload" onClick={autoGenerate} style={{ background: 'var(--bg-color)', color: 'var(--text-color)' }}>
+                                        <Sparkles size={16} /> Auto Generate
+                                    </button>
+                                    <button className="btn-upload" onClick={saveReportData} disabled={savingReport}>
+                                        <Save size={16} /> {savingReport ? 'Saving...' : 'Save Report'}
+                                    </button>
+                                </div>
                             </div>
                         </div>
 
