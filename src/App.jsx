@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react';
 import { LayoutDashboard, Settings as SettingsIcon, Sun, Moon, Receipt, BarChart2 } from 'lucide-react';
 import { getDb } from './db/Database';
+import { appDataDir, join } from '@tauri-apps/api/path';
+import { copyFile, mkdir, readDir, remove, exists } from '@tauri-apps/plugin-fs';
 import './App.css';
 import Inventory from './pages/Inventory';
 import Sales from './pages/Sales';
@@ -15,6 +17,39 @@ function App() {
   useEffect(() => {
     const initDb = async () => {
       try {
+        // Automatic DB Backup
+        if (!sessionStorage.getItem('backup_done')) {
+            try {
+                const appDir = await appDataDir();
+                const dbPath = await join(appDir, 'inventory.db');
+                if (await exists(dbPath)) {
+                    const backupDir = await join(appDir, 'backups');
+                    if (!(await exists(backupDir))) {
+                        await mkdir(backupDir, { recursive: true });
+                    }
+                    
+                    const timestamp = Date.now();
+                    const backupPath = await join(backupDir, `inventory_backup_${timestamp}.db`);
+                    await copyFile(dbPath, backupPath);
+                    
+                    // Cleanup old backups (keep latest 5)
+                    const files = await readDir(backupDir);
+                    const backups = files.filter(f => f.name && f.name.startsWith('inventory_backup_') && f.name.endsWith('.db'));
+                    backups.sort((a, b) => b.name.localeCompare(a.name)); // sort descending (newest first)
+                    
+                    if (backups.length > 5) {
+                        const toDelete = backups.slice(5);
+                        for (const f of toDelete) {
+                            await remove(await join(backupDir, f.name));
+                        }
+                    }
+                    sessionStorage.setItem('backup_done', 'true');
+                }
+            } catch (backupErr) {
+                console.error("Backup failed:", backupErr);
+            }
+        }
+
         const db = await getDb();
         const result = await db.select("SELECT value FROM settings WHERE key = 'theme'");
         if (result.length > 0) {

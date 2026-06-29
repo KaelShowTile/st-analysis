@@ -77,13 +77,15 @@
     border-bottom: 1px solid var(--border-color);
     display: flex;
     justify-content: space-between;
-    align-items: center;
+    align-items: flex-end;
 }
 
 .report-title-area h2 {
-    margin: 0 0 8px 0;
+    margin: 0 0 15px 0;
     font-size: 1.5rem;
     color: var(--text-color);
+    display: inline-block;
+    float: left;
 }
 
 .date-picker-row {
@@ -92,6 +94,7 @@
     gap: 12px;
     font-size: 0.9rem;
     color: #64748b;
+    width: 100%;
 }
 
 .date-picker-row input {

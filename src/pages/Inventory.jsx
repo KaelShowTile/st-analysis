@@ -192,8 +192,7 @@ export default function Inventory() {
                             pallet_qty=excluded.pallet_qty, box_qty=excluded.box_qty, piece_qty=excluded.piece_qty, 
                             m2_per_box=excluded.m2_per_box, pcs_per_box=excluded.pcs_per_box, box_per_pallet=excluded.box_per_pallet, 
                             stk=excluded.stk, days=excluded.days, x_inactive=excluded.x_inactive, batch=excluded.batch, 
-                            location=excluded.location, extracted_name=excluded.extracted_name, extracted_finish=excluded.extracted_finish, 
-                            extracted_size=excluded.extracted_size, extracted_colour=excluded.extracted_colour, backorder=excluded.backorder, backorder_amount=excluded.backorder_amount
+                            location=excluded.location, backorder=excluded.backorder, backorder_amount=excluded.backorder_amount
                     `, [sku, stock_no, sales_desc, supplier, available, holding, so_qty, total_qty, rrp, cost, online_name, showtile, pallet_qty, box_qty, piece_qty, m2_per_box, pcs_per_box, box_per_pallet, stk, days, x_inactive, batch, location, extractedName, extractedFinish, extractedSize, extractedColour, backorder, backorder_amount]);
                 }
             } catch (innerErr) {

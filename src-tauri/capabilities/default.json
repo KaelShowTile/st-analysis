@@ -15,6 +15,26 @@
     "sql:allow-close",
     "dialog:default",
     "fs:default",
-    "fs:allow-write-text-file"
+    "fs:allow-write-text-file",
+    {
+      "identifier": "fs:allow-exists",
+      "allow": [{ "path": "$APPDATA/**" }, { "path": "$APPCONFIG/**" }]
+    },
+    {
+      "identifier": "fs:allow-mkdir",
+      "allow": [{ "path": "$APPDATA/**" }, { "path": "$APPCONFIG/**" }]
+    },
+    {
+      "identifier": "fs:allow-copy-file",
+      "allow": [{ "path": "$APPDATA/**" }, { "path": "$APPCONFIG/**" }]
+    },
+    {
+      "identifier": "fs:allow-read-dir",
+      "allow": [{ "path": "$APPDATA/**" }, { "path": "$APPCONFIG/**" }]
+    },
+    {
+      "identifier": "fs:allow-remove",
+      "allow": [{ "path": "$APPDATA/**" }, { "path": "$APPCONFIG/**" }]
+    }
   ]
 }

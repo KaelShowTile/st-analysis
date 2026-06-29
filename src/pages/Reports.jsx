@@ -15,6 +15,7 @@ export default function Reports() {
 
     // Modals
     const [showAddReport, setShowAddReport] = useState(false);
+    const [editReportId, setEditReportId] = useState(null);
     const [newReportName, setNewReportName] = useState('');
     const [reportSearchTerm, setReportSearchTerm] = useState('');
     const [selectedProducts, setSelectedProducts] = useState([]);
@@ -23,7 +24,7 @@ export default function Reports() {
     const [showAddSize, setShowAddSize] = useState(false);
     const [newSizeName, setNewSizeName] = useState('');
     const [showAddColour, setShowAddColour] = useState(false);
-    
+
     // Sort state for reports list
     const [reportSortDir, setReportSortDir] = useState('az'); // 'az' or 'za'
 
@@ -176,7 +177,7 @@ export default function Reports() {
                 });
             });
         });
-        
+
         const fontSize = smallerFont ? '10px' : '13px';
         const paddingSize = smallerFont ? '4px' : '10px';
         const badgeSize = smallerFont ? '9px' : '11px';
@@ -255,19 +256,19 @@ export default function Reports() {
             console.error("Export failed", err);
         }
     };
-    
+
     const printReport = () => {
         const htmlContent = generateReportHTML(true);
         if (!htmlContent) return;
-        
+
         const iframe = document.createElement('iframe');
         iframe.style.display = 'none';
         document.body.appendChild(iframe);
-        
+
         iframe.contentWindow.document.open();
         iframe.contentWindow.document.write(htmlContent);
         iframe.contentWindow.document.close();
-        
+
         iframe.contentWindow.focus();
         setTimeout(() => {
             iframe.contentWindow.print();
@@ -279,22 +280,38 @@ export default function Reports() {
         }, 500);
     };
 
-    const createNewReport = async (name) => {
+    const saveReportSettings = async (name) => {
         if (!name) return;
         const db = await getDb();
-        const today = new Date();
-        const endStr = today.toISOString().split('T')[0];
-        today.setDate(today.getDate() - 30);
-        const startStr = today.toISOString().split('T')[0];
 
-        const emptyData = JSON.stringify({ finishes: [], productNames: selectedProducts });
-        const result = await db.execute('INSERT INTO reports (name, start_date, end_date, data) VALUES ($1, $2, $3, $4)',
-            [name, startStr, endStr, emptyData]);
-        await loadCoreData();
-        loadReportData(result.lastInsertId);
+        if (editReportId) {
+            // Update existing report
+            const currentData = activeReport.data || { finishes: [] };
+            currentData.productNames = selectedProducts;
+            const jsonData = JSON.stringify(currentData);
+
+            await db.execute('UPDATE reports SET name = $1, data = $2 WHERE id = $3', [name, jsonData, editReportId]);
+            await loadCoreData();
+            loadReportData(editReportId);
+        } else {
+            // Create new report
+            const today = new Date();
+            const endStr = today.toISOString().split('T')[0];
+            today.setDate(today.getDate() - 30);
+            const startStr = today.toISOString().split('T')[0];
+
+            const emptyData = JSON.stringify({ finishes: [], productNames: selectedProducts });
+            const result = await db.execute('INSERT INTO reports (name, start_date, end_date, data) VALUES ($1, $2, $3, $4)',
+                [name, startStr, endStr, emptyData]);
+            await loadCoreData();
+            loadReportData(result.lastInsertId);
+        }
+
         setShowAddReport(false);
         setNewReportName('');
         setSelectedProducts([]);
+        setEditReportId(null);
+        setReportSearchTerm('');
     };
 
     const updateActiveReportData = (newData) => {
@@ -312,7 +329,7 @@ export default function Reports() {
     const generateReportData = (reportObj, invList) => {
         let matches = [];
         const isMultiProduct = reportObj.data && reportObj.data.productNames && reportObj.data.productNames.length > 1;
-        
+
         if (reportObj.data && reportObj.data.productNames && reportObj.data.productNames.length > 0) {
             const pNames = reportObj.data.productNames.map(n => n.toLowerCase());
             matches = invList.filter(i => pNames.includes((i.extracted_name || '').toLowerCase()));
@@ -454,10 +471,18 @@ export default function Reports() {
     const handleAddFinish = (finishName) => {
         const d = cloneData();
         if (d.finishes.find(f => f.name === finishName)) return;
-        d.finishes.push({ name: finishName, colours: [], sizes: [] });
+        d.finishes.push({ name: finishName, sizes: [], colours: [] });
         updateActiveReportData(d);
-        setActiveFinishIdx(d.finishes.length - 1);
         setShowAddFinish(false);
+        setActiveFinishIdx(d.finishes.length - 1);
+    };
+
+    const deleteFinishTab = (idx) => {
+        if (!window.confirm("Delete this Finish tab and all its tables?")) return;
+        const d = cloneData();
+        d.finishes.splice(idx, 1);
+        updateActiveReportData(d);
+        setActiveFinishIdx(Math.max(0, idx - 1));
     };
 
     const handleAddSize = () => {
@@ -620,10 +645,10 @@ export default function Reports() {
                 const inDate = toJsDate(inInt);
                 const endDate = toJsDate(endInt === 99999999 ? toDateInt(new Date().toISOString()) : endInt);
                 let diffDays = Math.max(1, (endDate - inDate) / (1000 * 60 * 60 * 24));
-                
+
                 const combinedSales = cycleSalesSum + (Number(inv.holding) || 0) + (Number(inv.so_qty) || 0);
                 dailyAvg = combinedSales / diffDays;
-                
+
                 sumDailyAvg += dailyAvg;
                 validSkuCount++;
             }
@@ -712,7 +737,12 @@ export default function Reports() {
         <div className="reports-layout">
             <div className="reports-sidebar">
                 <div className="sidebar-header">
-                    <button className="btn-upload btn-full" onClick={() => setShowAddReport(true)} style={{ marginBottom: '8px' }}>
+                    <button className="btn-upload btn-full" onClick={() => {
+                        setEditReportId(null);
+                        setNewReportName('');
+                        setSelectedProducts([]);
+                        setShowAddReport(true);
+                    }} style={{ marginBottom: '8px' }}>
                         <Plus size={18} /> New Report
                     </button>
                     <button className="btn-upload btn-full" onClick={updateAllReports} disabled={savingReport} style={{ background: '#3b82f6', color: 'white', border: 'none', marginBottom: '8px' }}>
@@ -745,6 +775,14 @@ export default function Reports() {
                         <div className="report-topbar">
                             <div className="report-title-area">
                                 <h2>{activeReport.name}</h2>
+                                <button className="btn-upload" style={{ margin: '5px 15px 0', background: 'transparent', border: '1px solid #cbd5e1', color: '#64748b', padding: '4px 8px', fontSize: '12px', float: 'left' }} onClick={() => {
+                                    setEditReportId(activeReport.id);
+                                    setNewReportName(activeReport.name);
+                                    setSelectedProducts(activeReport.data?.productNames || []);
+                                    setShowAddReport(true);
+                                }}>
+                                    Edit Settings
+                                </button>
                                 <div className="date-picker-row">
                                     <label>Start Date:</label>
                                     <input
@@ -788,6 +826,7 @@ export default function Reports() {
                                     onClick={() => setActiveFinishIdx(i)}
                                 >
                                     {f.name}
+                                    {activeFinishIdx === i && <Trash2 size={14} style={{ marginLeft: '5px', marginBottom: '-1px', opacity: 0.5, color: '#ef4444' }} onClick={(e) => { e.stopPropagation(); deleteFinishTab(i); }} />}
                                 </button>
                             ))}
                             <button className="finish-tab" onClick={() => setShowAddFinish(true)} style={{ color: 'var(--primary-color)' }}>
@@ -878,43 +917,52 @@ export default function Reports() {
                 )}
             </div>
 
-            {/* Modals */}
             {showAddReport && (
-                <div className="modal-overlay" onClick={() => setShowAddReport(false)}>
-                    <div className="modal-content" onClick={e => e.stopPropagation()}>
-                        <div className="modal-header">
-                            <h3>Create New Report</h3>
-                            <X size={20} style={{ cursor: 'pointer' }} onClick={() => setShowAddReport(false)} />
+                <div className="modal-overlay">
+                    <div className="modal-content" style={{ width: '500px' }}>
+                        <h3>{editReportId ? 'Edit Report' : 'Create New Report'}</h3>
+                        <div style={{ marginBottom: '16px' }}>
+                            <label style={{ display: 'block', marginBottom: '8px', fontWeight: 'bold' }}>Custom Report Name</label>
+                            <input
+                                autoFocus
+                                type="text"
+                                className="search-input"
+                                value={newReportName}
+                                onChange={(e) => setNewReportName(e.target.value)}
+                                placeholder="e.g. Matt Collection"
+                            />
                         </div>
-                        <div className="modal-body">
-                            <div>
-                                <label style={{ display: 'block', marginBottom: '8px', fontSize: '0.9rem', color: '#64748b' }}>Custom Report Name</label>
-                                <input
-                                    className="search-input" style={{ width: '100%', marginBottom: '16px' }}
-                                    value={newReportName} onChange={e => setNewReportName(e.target.value)}
-                                    placeholder="Enter report name..."
-                                />
-                            </div>
-                            <div>
-                                <label style={{ display: 'block', marginBottom: '8px', fontSize: '0.9rem', color: '#64748b' }}>Or Select Product(s) from Inventory</label>
-                                <input
-                                    className="search-input" style={{ width: '100%', marginBottom: '8px' }}
-                                    value={reportSearchTerm} onChange={e => setReportSearchTerm(e.target.value)}
-                                    placeholder="Search products..."
-                                />
-                                <div className="select-list" style={{ maxHeight: '200px' }}>
-                                    {uniqueProductNames.map(n => (
-                                        <div key={n} className="sku-checkbox-item" onClick={() => toggleProductSelection(n)} style={{ display: 'flex', alignItems: 'center', padding: '8px 12px', borderBottom: '1px solid var(--border-color)', cursor: 'pointer' }}>
-                                            <input type="checkbox" checked={selectedProducts.includes(n)} readOnly style={{ marginRight: '10px' }} />
-                                            <span>{n}</span>
-                                        </div>
-                                    ))}
-                                </div>
+
+                        <div style={{ marginBottom: '16px' }}>
+                            <label style={{ display: 'block', marginBottom: '8px', fontWeight: 'bold' }}>Select Products to Include</label>
+                            <input
+                                type="text"
+                                className="search-input"
+                                value={reportSearchTerm}
+                                onChange={(e) => setReportSearchTerm(e.target.value)}
+                                placeholder="Search products..."
+                                style={{ marginBottom: '8px', width: '100%' }}
+                            />
+                            <div style={{ maxHeight: '300px', overflowY: 'auto', border: '1px solid #e2e8f0', borderRadius: '4px', padding: '8px' }}>
+                                {uniqueProductNames.filter(p => p.toLowerCase().includes(reportSearchTerm.toLowerCase())).map(product => (
+                                    <label key={product} style={{ display: 'flex', alignItems: 'center', marginBottom: '8px', cursor: 'pointer' }}>
+                                        <input
+                                            type="checkbox"
+                                            checked={selectedProducts.includes(product)}
+                                            onChange={() => toggleProductSelection(product)}
+                                            style={{ marginRight: '8px' }}
+                                        />
+                                        {product}
+                                    </label>
+                                ))}
                             </div>
                         </div>
-                        <div className="modal-footer">
-                            <button className="btn-upload" style={{ background: 'var(--bg-color)', color: 'var(--text-color)' }} onClick={() => {setShowAddReport(false); setSelectedProducts([]); setNewReportName('');}}>Cancel</button>
-                            <button className="btn-upload" onClick={() => createNewReport(newReportName)} disabled={!newReportName}>Create Report</button>
+
+                        <div className="modal-actions" style={{ display: 'flex', gap: '5px', justifyContent: 'flex-end' }}>
+                            <button className="btn-primary" onClick={() => { setShowAddReport(false); setEditReportId(null); setNewReportName(''); setSelectedProducts([]); setReportSearchTerm(''); }}>Cancel</button>
+                            <button className="btn-primary" onClick={() => saveReportSettings(newReportName)} disabled={!newReportName || selectedProducts.length === 0}>
+                                {editReportId ? 'Save Changes' : 'Create Report'}
+                            </button>
                         </div>
                     </div>
                 </div>
