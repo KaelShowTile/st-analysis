@@ -4,12 +4,14 @@ import { Upload, Search, Trash2 } from 'lucide-react';
 import { getDb } from '../db/Database';
 import './Inventory.css'; // Reusing the same styles as Inventory page
 
-export default function Sales() {
+export default function Sales({ currentUser }) {
     const [data, setData] = useState([]);
     const [loading, setLoading] = useState(true);
     const [searchTerm, setSearchTerm] = useState('');
     const [renderLimit, setRenderLimit] = useState(50);
     const fileInputRef = useRef(null);
+
+    const canWrite = currentUser?.permissions?.sales?.write;
 
     const loadData = async (showSpinner = false) => {
         if (showSpinner) setLoading(true);
@@ -27,6 +29,7 @@ export default function Sales() {
     }, []);
 
     const processData = async (parsedData) => {
+        if (!canWrite) return;
         setLoading(true);
         try {
             const db = await getDb();
@@ -78,6 +81,7 @@ export default function Sales() {
     };
 
     const handleClearAll = async () => {
+        if (!canWrite) return;
         if (!window.confirm("Are you sure you want to delete all sales data? This cannot be undone.")) return;
         setLoading(true);
         try {
@@ -92,6 +96,7 @@ export default function Sales() {
     };
 
     const handleFileUpload = (e) => {
+        if (!canWrite) return;
         const file = e.target.files[0];
         if (!file) return;
 
@@ -143,8 +148,14 @@ export default function Sales() {
                     <button 
                         className="btn-upload" 
                         onClick={handleClearAll}
-                        disabled={loading}
-                        style={{ background: 'linear-gradient(135deg, #ef4444 0%, #dc2626 100%)', boxShadow: '0 4px 6px rgba(239, 68, 68, 0.25)' }}
+                        disabled={loading || !canWrite}
+                        style={{ 
+                            background: canWrite ? 'linear-gradient(135deg, #ef4444 0%, #dc2626 100%)' : '#d1d5db',
+                            boxShadow: canWrite ? '0 4px 6px rgba(239, 68, 68, 0.25)' : 'none',
+                            cursor: canWrite ? 'pointer' : 'not-allowed',
+                            opacity: canWrite ? 1 : 0.6
+                        }}
+                        title={!canWrite ? 'You do not have permission to clear data' : ''}
                     >
                         <Trash2 size={16} />
                         Clear All
@@ -155,11 +166,18 @@ export default function Sales() {
                         ref={fileInputRef}
                         onChange={handleFileUpload}
                         style={{ display: 'none' }}
+                        disabled={!canWrite}
                     />
                     <button
                         className="btn-upload"
                         onClick={() => fileInputRef.current.click()}
-                        disabled={loading}
+                        disabled={loading || !canWrite}
+                        style={{
+                            background: canWrite ? 'var(--primary-color)' : '#d1d5db',
+                            cursor: canWrite ? 'pointer' : 'not-allowed',
+                            opacity: canWrite ? 1 : 0.6
+                        }}
+                        title={!canWrite ? 'You do not have permission to upload' : ''}
                     >
                         <Upload size={16} />
                         {loading ? 'Processing...' : 'Import CSV'}

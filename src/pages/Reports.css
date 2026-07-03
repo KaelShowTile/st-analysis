@@ -117,7 +117,6 @@
     background-color: var(--surface-color);
     border-bottom: 1px solid var(--border-color);
     gap: 8px;
-    overflow-x: auto;
 }
 
 .finish-tab {
@@ -154,10 +153,10 @@
 
 .sizes-horizontal-scroll {
     display: flex;
+    flex-direction: column;
     gap: 32px;
-    align-items: flex-start;
+    align-items: stretch;
     padding-bottom: 24px;
-    flex-wrap: wrap;
 }
 
 .size-table-card {

@@ -1,0 +1,113 @@
+.dashboard-layout {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    background-color: var(--bg-color);
+}
+
+.dashboard-header {
+    padding: 24px 32px;
+    background-color: var(--surface-color);
+    border-bottom: 1px solid var(--border-color);
+}
+
+.dashboard-header h2 {
+    margin: 0 0 8px 0;
+    color: var(--text-color);
+    display: flex;
+    align-items: center;
+}
+
+.dashboard-header p {
+    margin: 0;
+    color: #64748b;
+    font-size: 0.95rem;
+}
+
+.dashboard-content {
+    flex: 1;
+    padding: 32px;
+    overflow-y: auto;
+}
+
+.alert-card {
+    background-color: var(--surface-color);
+    border: 1px solid var(--border-color);
+    border-radius: 12px;
+    box-shadow: var(--shadow-sm);
+    overflow: hidden;
+}
+
+.alert-card-header {
+    padding: 16px 24px;
+    background-color: #fefce8;
+    border-bottom: 1px solid #fef08a;
+    display: flex;
+    align-items: center;
+}
+
+.alert-card-header h3 {
+    margin: 0;
+    color: #854d0e;
+    font-size: 1.1rem;
+    flex: 1;
+}
+
+.badge {
+    background-color: #eab308;
+    color: white;
+    padding: 2px 10px;
+    border-radius: 99px;
+    font-size: 0.8rem;
+    font-weight: 600;
+}
+
+.alert-table-container {
+    overflow-x: auto;
+}
+
+.dashboard-table {
+    width: 100%;
+    border-collapse: collapse;
+    text-align: left;
+}
+
+.dashboard-table th,
+.dashboard-table td {
+    padding: 12px 24px;
+    border-bottom: 1px solid var(--border-color);
+    color: var(--text-color);
+    font-size: 0.9rem;
+}
+
+.dashboard-table th {
+    background-color: #f8fafc;
+    font-weight: 600;
+    color: #475569;
+}
+
+.dashboard-table tbody tr:hover {
+    background-color: var(--bg-color);
+}
+
+.dashboard-table .num {
+    text-align: right;
+    font-family: monospace;
+}
+
+.btn-view {
+    padding: 6px 12px;
+    background-color: transparent;
+    border: 1px solid var(--primary-color);
+    color: var(--primary-color);
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 0.8rem;
+    font-weight: 600;
+    transition: all 0.2s;
+}
+
+.btn-view:hover {
+    background-color: var(--primary-color);
+    color: white;
+}

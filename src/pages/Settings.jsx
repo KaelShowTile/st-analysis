@@ -1,18 +1,75 @@
 import { useState, useEffect } from 'react';
-import { getDb } from '../db/Database';
+import { getDb, getDbPath } from '../db/Database';
 import { save } from '@tauri-apps/plugin-dialog';
 import { writeTextFile } from '@tauri-apps/plugin-fs';
 import './Settings.css';
-import { Trash2, Plus, Download, Upload, DatabaseBackup, RotateCcw } from 'lucide-react';
+import { Trash2, Plus, Download, Upload, DatabaseBackup, RotateCcw, FolderOpen, Edit3, X, UserCog } from 'lucide-react';
 import { appDataDir, join } from '@tauri-apps/api/path';
-import { readDir, copyFile } from '@tauri-apps/plugin-fs';
+import { readDir, copyFile, exists } from '@tauri-apps/plugin-fs';
+import { load } from '@tauri-apps/plugin-store';
 
-export default function Settings() {
+export default function Settings({ currentUser }) {
     const [attributes, setAttributes] = useState([]);
     const [newType, setNewType] = useState('colour');
     const [newValue, setNewValue] = useState('');
     const [backups, setBackups] = useState([]);
     const [isRestoring, setIsRestoring] = useState(false);
+    const [currentDbPath, setCurrentDbPath] = useState('');
+
+    const isAdmin = currentUser?.username === 'admin';
+    const [users, setUsers] = useState([]);
+    const [showUserModal, setShowUserModal] = useState(false);
+    const [editingUserId, setEditingUserId] = useState(null);
+    const [userForm, setUserForm] = useState({
+        username: '', password: '', 
+        permissions: {
+            inventory: { read: false, write: false },
+            sales: { read: false, write: false },
+            reports: { read: false, write: false },
+            settings: { read: false, write: false }
+        }
+    });
+
+    const loadDbPath = async () => {
+        const path = await getDbPath();
+        if (path) {
+            setCurrentDbPath(path);
+        } else {
+            const appDir = await appDataDir();
+            setCurrentDbPath(await join(appDir, 'inventory.db'));
+        }
+    };
+
+    const handleMoveDatabase = async () => {
+        try {
+            const newPath = await save({
+                filters: [{ name: 'SQLite Database', extensions: ['db'] }],
+                defaultPath: 'inventory.db'
+            });
+
+            if (newPath) {
+                // Copy current DB to new path
+                const appDir = await appDataDir();
+                const currentCustomPath = await getDbPath();
+                const sourcePath = currentCustomPath ? currentCustomPath : await join(appDir, 'inventory.db');
+                
+                if (await exists(sourcePath)) {
+                    await copyFile(sourcePath, newPath);
+                }
+
+                // Save new path to Store
+                const store = await load('settings.json', { autoSave: false });
+                await store.set('customDbPath', newPath);
+                await store.save();
+
+                alert("Database successfully moved! The application will now restart to apply changes.");
+                window.location.reload();
+            }
+        } catch (err) {
+            console.error("Failed to move database:", err);
+            alert("Failed to move database. Please check permissions and try again.");
+        }
+    };
 
     const loadAttributes = async () => {
         const db = await getDb();
@@ -43,9 +100,22 @@ export default function Settings() {
         }
     };
 
+    const loadUsers = async () => {
+        if (!isAdmin) return;
+        try {
+            const db = await getDb();
+            const results = await db.select('SELECT id, username, password, permissions FROM users ORDER BY id ASC');
+            setUsers(results.map(u => ({ ...u, permissions: JSON.parse(u.permissions) })));
+        } catch (err) {
+            console.error("Could not load users", err);
+        }
+    };
+
     useEffect(() => {
         loadAttributes();
         loadBackups();
+        loadDbPath();
+        loadUsers();
     }, []);
 
     const handleAdd = async (e) => {
@@ -68,6 +138,40 @@ export default function Settings() {
             loadAttributes();
         } catch (err) {
             console.error('Failed to delete attribute', err);
+        }
+    };
+
+    const handleSaveUser = async () => {
+        if (!userForm.username || !userForm.password) return alert("Username and password are required.");
+        
+        const db = await getDb();
+        const perms = JSON.stringify(userForm.permissions);
+        
+        try {
+            if (editingUserId) {
+                await db.execute('UPDATE users SET username = $1, password = $2, permissions = $3 WHERE id = $4', 
+                    [userForm.username, userForm.password, perms, editingUserId]);
+            } else {
+                await db.execute('INSERT INTO users (username, password, permissions) VALUES ($1, $2, $3)', 
+                    [userForm.username, userForm.password, perms]);
+            }
+            setShowUserModal(false);
+            loadUsers();
+        } catch (err) {
+            console.error("Failed to save user", err);
+            alert("Failed to save user (username might already exist).");
+        }
+    };
+
+    const handleDeleteUser = async (id) => {
+        if (id === 1) return alert("Cannot delete the admin account.");
+        if (!window.confirm("Are you sure you want to delete this user?")) return;
+        try {
+            const db = await getDb();
+            await db.execute('DELETE FROM users WHERE id = $1', [id]);
+            loadUsers();
+        } catch (err) {
+            console.error("Failed to delete user", err);
         }
     };
 
@@ -224,6 +328,167 @@ export default function Settings() {
                     {backups.length === 0 && <p className="empty-text">No backups available yet. Restart the app to create one.</p>}
                 </div>
             </div>
+
+            <div className="settings-card" style={{ marginTop: '24px' }}>
+                <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '16px'}}>
+                    <div>
+                        <h3 style={{margin: '0 0 4px 0'}}>Database Storage Location</h3>
+                        <p className="subtitle" style={{margin: 0}}>Move your database to a custom folder (e.g. Google Drive) for backup or sharing.</p>
+                    </div>
+                </div>
+
+                <div className="attribute-item" style={{ display: 'flex', justifyContent: 'space-between', padding: '12px 16px', background: 'var(--surface-color)', borderRadius: '6px', border: '1px solid var(--border-color)', alignItems: 'center' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flex: 1, overflow: 'hidden' }}>
+                        <FolderOpen size={18} style={{ color: '#3b82f6', flexShrink: 0 }} />
+                        <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                            <div style={{ fontWeight: 500 }}>Current Location</div>
+                            <div style={{ fontSize: '0.8rem', color: '#64748b', overflow: 'hidden', textOverflow: 'ellipsis' }} title={currentDbPath}>{currentDbPath}</div>
+                        </div>
+                    </div>
+                    <button onClick={handleMoveDatabase} className="btn-primary" style={{ flexShrink: 0, marginLeft: '16px' }}>
+                        Move Database
+                    </button>
+                </div>
+            </div>
+
+            {isAdmin && (
+                <div className="settings-card" style={{ marginTop: '24px' }}>
+                    <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '16px'}}>
+                        <div>
+                            <h3 style={{margin: '0 0 4px 0'}}>User Management</h3>
+                            <p className="subtitle" style={{margin: 0}}>Create users and configure page-level read/write permissions.</p>
+                        </div>
+                        <button className="btn-primary" onClick={() => {
+                            setEditingUserId(null);
+                            setUserForm({
+                                username: '', password: '', 
+                                permissions: {
+                                    inventory: { read: false, write: false },
+                                    sales: { read: false, write: false },
+                                    reports: { read: false, write: false },
+                                    settings: { read: false, write: false }
+                                }
+                            });
+                            setShowUserModal(true);
+                        }} style={{backgroundColor: 'var(--primary-color)'}}>
+                            <Plus size={14} style={{marginRight: '6px'}} /> Add User
+                        </button>
+                    </div>
+
+                    <div className="attributes-list">
+                        {users.map(u => (
+                            <div key={u.id} className="attribute-item" style={{ display: 'flex', justifyContent: 'space-between', padding: '12px 16px', background: 'var(--surface-color)', borderRadius: '6px', marginBottom: '8px', border: '1px solid var(--border-color)', alignItems: 'center' }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                                    <UserCog size={18} style={{ color: '#8b5cf6' }} />
+                                    <div>
+                                        <div style={{ fontWeight: 500 }}>{u.username}</div>
+                                        <div style={{ fontSize: '0.8rem', color: '#64748b' }}>
+                                            Password: {u.password}
+                                        </div>
+                                    </div>
+                                </div>
+                                <div style={{ display: 'flex', gap: '8px' }}>
+                                    <button onClick={() => {
+                                        setEditingUserId(u.id);
+                                        setUserForm({
+                                            username: u.username,
+                                            password: u.password,
+                                            permissions: u.permissions
+                                        });
+                                        setShowUserModal(true);
+                                    }} className="btn-icon">
+                                        <Edit3 size={16} />
+                                    </button>
+                                    <button onClick={() => handleDeleteUser(u.id)} disabled={u.id === 1} className="btn-icon danger" style={{ opacity: u.id === 1 ? 0.3 : 1 }}>
+                                        <Trash2 size={16} />
+                                    </button>
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+                </div>
+            )}
+
+            {showUserModal && (
+                <div className="modal-overlay" onClick={() => setShowUserModal(false)}>
+                    <div className="modal-content" style={{ width: '500px' }} onClick={e => e.stopPropagation()}>
+                        <div className="modal-header">
+                            <h3>{editingUserId ? 'Edit User' : 'New User'}</h3>
+                            <X size={20} style={{ cursor: 'pointer' }} onClick={() => setShowUserModal(false)} />
+                        </div>
+                        <div className="modal-body">
+                            <div style={{ marginBottom: '16px' }}>
+                                <label style={{ display: 'block', marginBottom: '4px', fontWeight: 'bold' }}>Username</label>
+                                <input
+                                    type="text"
+                                    className="form-input"
+                                    value={userForm.username}
+                                    onChange={e => setUserForm({...userForm, username: e.target.value})}
+                                    disabled={editingUserId === 1}
+                                />
+                            </div>
+                            <div style={{ marginBottom: '16px' }}>
+                                <label style={{ display: 'block', marginBottom: '4px', fontWeight: 'bold' }}>Password (Plain text)</label>
+                                <input
+                                    type="text"
+                                    className="form-input"
+                                    value={userForm.password}
+                                    onChange={e => setUserForm({...userForm, password: e.target.value})}
+                                />
+                            </div>
+
+                            <div style={{ marginBottom: '16px' }}>
+                                <label style={{ display: 'block', marginBottom: '8px', fontWeight: 'bold' }}>Permissions</label>
+                                {Object.keys(userForm.permissions).map(page => (
+                                    <div key={page} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px', borderBottom: '1px solid #e2e8f0' }}>
+                                        <div style={{ textTransform: 'capitalize', fontWeight: '500' }}>{page}</div>
+                                        <div style={{ display: 'flex', gap: '16px' }}>
+                                            <label style={{ display: 'flex', alignItems: 'center', gap: '4px', cursor: editingUserId === 1 ? 'not-allowed' : 'pointer', opacity: editingUserId === 1 ? 0.5 : 1 }}>
+                                                <input 
+                                                    type="checkbox" 
+                                                    checked={userForm.permissions[page].read}
+                                                    disabled={editingUserId === 1}
+                                                    onChange={e => {
+                                                        const val = e.target.checked;
+                                                        setUserForm(prev => ({
+                                                            ...prev,
+                                                            permissions: {
+                                                                ...prev.permissions,
+                                                                [page]: { ...prev.permissions[page], read: val, write: val ? prev.permissions[page].write : false }
+                                                            }
+                                                        }));
+                                                    }}
+                                                />
+                                                Read
+                                            </label>
+                                            <label style={{ display: 'flex', alignItems: 'center', gap: '4px', cursor: editingUserId === 1 ? 'not-allowed' : 'pointer', opacity: editingUserId === 1 ? 0.5 : 1 }}>
+                                                <input 
+                                                    type="checkbox" 
+                                                    checked={userForm.permissions[page].write}
+                                                    disabled={editingUserId === 1 || !userForm.permissions[page].read}
+                                                    onChange={e => setUserForm(prev => ({
+                                                        ...prev,
+                                                        permissions: {
+                                                            ...prev.permissions,
+                                                            [page]: { ...prev.permissions[page], write: e.target.checked }
+                                                        }
+                                                    }))}
+                                                />
+                                                Write
+                                            </label>
+                                        </div>
+                                    </div>
+                                ))}
+                                {editingUserId === 1 && <p style={{ fontSize: '0.8rem', color: '#ef4444', marginTop: '8px' }}>Admin permissions cannot be modified.</p>}
+                            </div>
+
+                            <button className="btn-primary" onClick={handleSaveUser} style={{ width: '100%', marginTop: '16px' }}>
+                                Save User
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
         </div>
     );
 }

@@ -1,17 +1,21 @@
 import { useState, useEffect, useMemo } from 'react';
 import { getDb } from '../db/Database';
-import { Plus, Search, Trash2, Save, X, PlusCircle, Sparkles, Download, RefreshCw, Printer } from 'lucide-react';
+import { Plus, Search, Trash2, Save, X, PlusCircle, Sparkles, Download, RefreshCw, Printer, GripVertical } from 'lucide-react';
 import { save } from '@tauri-apps/plugin-dialog';
 import { writeTextFile } from '@tauri-apps/plugin-fs';
+import { DragDropContext, Droppable, Draggable } from '@hello-pangea/dnd';
+import { toDateInt, getCellCalculations } from '../utils/calculations';
 import './Reports.css';
 
-export default function Reports() {
+export default function Reports({ currentUser, initialReportId }) {
     const [reports, setReports] = useState([]);
     const [activeReport, setActiveReport] = useState(null);
     const [inventoryMap, setInventoryMap] = useState({});
     const [inventoryList, setInventoryList] = useState([]);
     const [attributes, setAttributes] = useState({ finishes: [], colours: [] });
     const [savingReport, setSavingReport] = useState(false);
+
+    const canWrite = currentUser?.permissions?.reports?.write;
 
     // Modals
     const [showAddReport, setShowAddReport] = useState(false);
@@ -25,9 +29,9 @@ export default function Reports() {
     const [newSizeName, setNewSizeName] = useState('');
     const [showAddColour, setShowAddColour] = useState(false);
 
-    // Sort state for reports list
+    // Sort and Search state for reports list
     const [reportSortDir, setReportSortDir] = useState('az'); // 'az' or 'za'
-
+    const [listSearchTerm, setListSearchTerm] = useState('');
     const [skuModal, setSkuModal] = useState({ show: false, finishIdx: -1, sizeIdx: -1, colour: '', selectedSkus: [] });
     const [skuSearchTerm, setSkuSearchTerm] = useState('');
 
@@ -69,6 +73,12 @@ export default function Reports() {
     useEffect(() => {
         loadCoreData();
     }, []);
+
+    useEffect(() => {
+        if (initialReportId) {
+            loadReportData(initialReportId);
+        }
+    }, [initialReportId]);
 
     const loadReportData = async (id) => {
         const db = await getDb();
@@ -128,7 +138,7 @@ export default function Reports() {
                     const cell = size.cells[colour];
                     if (!cell || cell.deleted) return;
 
-                    const { skus, rowSpan, skuStats, cellTotalSale, total, cycle, isLowStock, order } = getCellCalculations(cell);
+                    const { skus, rowSpan, skuStats, cellTotalSale, total, cycle, isLowStock, order } = getCellCalculations(cell, activeReport.start_date, activeReport.end_date, inventoryMap, salesData);
 
                     const totalStyle = isLowStock ? 'background-color: #fef08a; font-weight: bold;' : 'font-weight: bold;';
 
@@ -281,6 +291,7 @@ export default function Reports() {
     };
 
     const saveReportSettings = async (name) => {
+        if (!canWrite) return;
         if (!name) return;
         const db = await getDb();
 
@@ -319,6 +330,7 @@ export default function Reports() {
     };
 
     const deleteReport = async (id) => {
+        if (!canWrite) return;
         if (!window.confirm("Delete this report?")) return;
         const db = await getDb();
         await db.execute('DELETE FROM reports WHERE id = $1', [id]);
@@ -357,23 +369,28 @@ export default function Reports() {
                 sName = `${pName} - ${sNameRaw}`;
             }
 
-            let finish = newData.finishes.find(f => f.name === fName);
+            // Case-insensitive matching for finish
+            let finish = newData.finishes.find(f => f.name.toLowerCase() === fName.toLowerCase());
             if (!finish) {
                 finish = { name: fName, colours: [], sizes: [] };
                 newData.finishes.push(finish);
             }
 
-            if (!finish.colours.includes(cName)) {
+            // Case-insensitive matching for colour
+            let colourStr = finish.colours.find(c => c.toLowerCase() === cName.toLowerCase());
+            if (!colourStr) {
                 finish.colours.push(cName);
+                colourStr = cName;
             }
 
-            let sizeObj = finish.sizes.find(s => s.name === sName);
+            // Case-insensitive matching for size
+            let sizeObj = finish.sizes.find(s => s.name.toLowerCase() === sName.toLowerCase());
             if (!sizeObj) {
                 sizeObj = { name: sName, cells: {} };
                 finish.sizes.push(sizeObj);
             }
 
-            const key = `${fName}|${sName}|${cName}`;
+            const key = `${finish.name.toLowerCase()}|${sizeObj.name.toLowerCase()}|${colourStr.toLowerCase()}`;
             if (!grouped[key]) grouped[key] = [];
             grouped[key].push(item);
         });
@@ -383,7 +400,7 @@ export default function Reports() {
                 finish.colours.forEach(c => {
                     if (!sz.cells[c]) sz.cells[c] = { skus: [], order: 0 };
 
-                    const items = grouped[`${finish.name}|${sz.name}|${c}`] || [];
+                    const items = grouped[`${finish.name.toLowerCase()}|${sz.name.toLowerCase()}|${c.toLowerCase()}`] || [];
                     const normals = items.filter(i => i.backorder !== 1);
                     const backorders = items.filter(i => i.backorder === 1);
 
@@ -408,6 +425,7 @@ export default function Reports() {
     };
 
     const updateAllReports = async () => {
+        if (!canWrite) return;
         if (!window.confirm("This will overwrite all tables and Order inputs for ALL reports in the database based on the current inventory. This action cannot be undone. Continue?")) return;
         setSavingReport(true);
         try {
@@ -478,11 +496,43 @@ export default function Reports() {
     };
 
     const deleteFinishTab = (idx) => {
+        if (!canWrite) return;
         if (!window.confirm("Delete this Finish tab and all its tables?")) return;
         const d = cloneData();
         d.finishes.splice(idx, 1);
         updateActiveReportData(d);
         setActiveFinishIdx(Math.max(0, idx - 1));
+    };
+
+    const handleDragEnd = (result) => {
+        if (!result.destination || !canWrite) return;
+        const { source, destination, type } = result;
+
+        if (source.droppableId === destination.droppableId && source.index === destination.index) return;
+
+        const d = cloneData();
+
+        if (type === 'finishes') {
+            const [draggedItem] = d.finishes.splice(source.index, 1);
+            d.finishes.splice(destination.index, 0, draggedItem);
+
+            let newActiveIdx = activeFinishIdx;
+            if (activeFinishIdx === source.index) {
+                newActiveIdx = destination.index;
+            } else if (source.index < activeFinishIdx && destination.index >= activeFinishIdx) {
+                newActiveIdx = activeFinishIdx - 1;
+            } else if (source.index > activeFinishIdx && destination.index <= activeFinishIdx) {
+                newActiveIdx = activeFinishIdx + 1;
+            }
+
+            updateActiveReportData(d);
+            setActiveFinishIdx(newActiveIdx);
+        } else if (type === 'sizes') {
+            const sizes = d.finishes[activeFinishIdx].sizes;
+            const [draggedItem] = sizes.splice(source.index, 1);
+            sizes.splice(destination.index, 0, draggedItem);
+            updateActiveReportData(d);
+        }
     };
 
     const handleAddSize = () => {
@@ -524,6 +574,7 @@ export default function Reports() {
     };
 
     const handleDeleteSize = (sizeIdx) => {
+        if (!canWrite) return;
         if (!window.confirm("Delete this size table?")) return;
         const d = cloneData();
         d.finishes[activeFinishIdx].sizes.splice(sizeIdx, 1);
@@ -531,6 +582,7 @@ export default function Reports() {
     };
 
     const handleDeleteColour = (sizeIdx, colourName) => {
+        if (!canWrite) return;
         if (!window.confirm(`Delete row ${colourName} from this table?`)) return;
         const d = cloneData();
         if (!d.finishes[activeFinishIdx].sizes[sizeIdx].cells[colourName]) return;
@@ -539,6 +591,7 @@ export default function Reports() {
     };
 
     const autoGenerate = async () => {
+        if (!canWrite) return;
         if (!window.confirm("This will overwrite all existing tables and Order inputs in this report. Continue?")) return;
 
         const newData = generateReportData(activeReport, inventoryList);
@@ -584,87 +637,9 @@ export default function Reports() {
         }
     };
 
-    const toDateInt = (dateStr) => {
-        if (!dateStr) return 0;
-        const s = String(dateStr).trim().split(' ')[0];
-        const parts = s.split('/');
-        if (parts.length === 3) {
-            const d = parts[0].padStart(2, '0');
-            const m = parts[1].padStart(2, '0');
-            const y = parts[2];
-            return parseInt(`${y}${m}${d}`, 10);
-        }
-        const partsDash = s.split('-');
-        if (partsDash.length >= 3) {
-            const y = partsDash[0];
-            const m = partsDash[1].padStart(2, '0');
-            const d = parseInt(partsDash[2], 10).toString().padStart(2, '0');
-            return parseInt(`${y}${m}${d}`, 10);
-        }
-        return 0;
-    };
-
-    const getCellCalculations = (cell) => {
-        const skus = cell.skus || [];
-        const rowSpan = Math.max(1, skus.length);
-
-        let sumAvailable = 0;
-        let sumDailyAvg = 0;
-        let validSkuCount = 0;
-        let cellTotalSale = 0;
-
-        const endInt = activeReport.end_date ? toDateInt(activeReport.end_date) : 99999999;
-        const startInt = activeReport.start_date ? toDateInt(activeReport.start_date) : 0;
-
-        const skuStats = skus.map(sku => {
-            const cleanSku = String(sku).trim();
-            const inv = inventoryMap[sku] || { available: 0, total_qty: 0, days: null };
-            sumAvailable += inv.available;
-
-            const skuSales = salesData[cleanSku] || salesData[sku] || [];
-            let cycleSalesSum = 0;
-            let rangeSalesSum = 0;
-
-            const inInt = inv.days ? toDateInt(inv.days) : null;
-            skuSales.forEach(sale => {
-                const sInt = toDateInt(sale.date);
-                if (!sInt) return;
-                const netQty = Number(sale.qty) || 0;
-                if (inInt !== null && sInt >= inInt && sInt <= endInt) cycleSalesSum += netQty;
-                if (sInt >= startInt && sInt <= endInt) rangeSalesSum += netQty;
-            });
-
-            cellTotalSale += rangeSalesSum;
-
-            let dailyAvg = 0;
-            if (inInt !== null) {
-                const toJsDate = (intVal) => {
-                    const str = String(intVal);
-                    return new Date(`${str.substring(0, 4)}-${str.substring(4, 6)}-${str.substring(6, 8)}T00:00:00`);
-                };
-                const inDate = toJsDate(inInt);
-                const endDate = toJsDate(endInt === 99999999 ? toDateInt(new Date().toISOString()) : endInt);
-                let diffDays = Math.max(1, (endDate - inDate) / (1000 * 60 * 60 * 24));
-
-                const combinedSales = cycleSalesSum + (Number(inv.holding) || 0) + (Number(inv.so_qty) || 0);
-                dailyAvg = combinedSales / diffDays;
-
-                sumDailyAvg += dailyAvg;
-                validSkuCount++;
-            }
-            return { sku, inv, dailyAvg };
-        });
-
-        const total = sumAvailable + (cell.order || 0);
-        const cycle = validSkuCount > 0 ? (sumDailyAvg / validSkuCount) * 30 : 0;
-        const isLowStock = cycle > 0 && total < (2 * cycle);
-
-        return { skus, rowSpan, skuStats, cellTotalSale, total, cycle, isLowStock, order: cell.order || 0 };
-    };
-
     const renderCellRows = (sizeIdx, size, colour) => {
         const cell = size.cells[colour];
-        const { skus, rowSpan, skuStats, cellTotalSale, total, cycle, isLowStock, order } = getCellCalculations(cell);
+        const { skus, rowSpan, skuStats, cellTotalSale, total, cycle, isLowStock, order } = getCellCalculations(cell, activeReport.start_date, activeReport.end_date, inventoryMap, salesData);
 
         const totalStyle = { fontWeight: 'bold' };
         if (isLowStock) totalStyle.backgroundColor = '#ffe000';
@@ -674,12 +649,12 @@ export default function Reports() {
                 <tr key={`${size.name}-${colour}-empty`}>
                     <td>
                         <div style={{ display: 'flex', alignItems: 'center' }}>
-                            <Trash2 size={14} style={{ cursor: 'pointer', opacity: 0.5, color: '#ef4444', marginTop: '3px', marginRight: '3px', width: '12' }} onClick={() => handleDeleteColour(sizeIdx, colour)} />
-                            <span style={{ textTransform: 'capitalize' }}>{colour} <span className="action-text" style={{ fontSize: '0.8rem', marginLeft: '6px' }} onClick={() => openSkuModal(sizeIdx, colour, [])}>[+SKU]</span></span>
+                            {canWrite && <Trash2 size={14} style={{ cursor: 'pointer', opacity: 0.5, color: '#ef4444', marginTop: '3px', marginRight: '3px', width: '12' }} onClick={() => handleDeleteColour(sizeIdx, colour)} />}
+                            <span style={{ textTransform: 'capitalize' }}>{colour} {canWrite && <span className="action-text" style={{ fontSize: '0.8rem', marginLeft: '6px' }} onClick={() => openSkuModal(sizeIdx, colour, [])}>[+SKU]</span>}</span>
                         </div>
                     </td>
                     <td colSpan="3" style={{ color: '#94a3b8', fontStyle: 'italic', textAlign: 'center' }}>No SKUs selected</td>
-                    <td><input className="order-input" type="number" value={order} onChange={e => updateCellOrder(sizeIdx, colour, e.target.value)} /></td>
+                    <td><input className="order-input" type="number" value={order} onChange={e => updateCellOrder(sizeIdx, colour, e.target.value)} disabled={!canWrite} /></td>
                     <td style={totalStyle}>{parseFloat(total.toFixed(2))}</td>
                     <td>0</td>
                     <td>0</td>
@@ -692,9 +667,9 @@ export default function Reports() {
                 <tr key={`${size.name}-${colour}-main`}>
                     <td rowSpan={rowSpan} style={{ minWidth: '150px' }}>
                         <div style={{ display: 'flex', flexWrap: 'wrap', flexDirection: 'row', height: '100%', minHeight: '40px' }}>
-                            <Trash2 size={14} style={{ cursor: 'pointer', opacity: 0.5, color: '#ef4444', marginTop: '3px', marginRight: '3px' }} onClick={() => handleDeleteColour(sizeIdx, colour)} />
+                            {canWrite && <Trash2 size={14} style={{ cursor: 'pointer', opacity: 0.5, color: '#ef4444', marginTop: '3px', marginRight: '3px' }} onClick={() => handleDeleteColour(sizeIdx, colour)} />}
                             <div style={{ textTransform: 'capitalize' }}>
-                                {colour} <span className="action-text" style={{ fontSize: '0.8rem', marginLeft: '2px' }} onClick={() => openSkuModal(sizeIdx, colour, skus)}>[Edit]</span>
+                                {colour} {canWrite && <span className="action-text" style={{ fontSize: '0.8rem', marginLeft: '2px' }} onClick={() => openSkuModal(sizeIdx, colour, skus)}>[Edit]</span>}
                             </div>
                         </div>
                     </td>
@@ -702,7 +677,7 @@ export default function Reports() {
                     <td>{skuStats[0].inv.days || '-'}</td>
                     <td className="num">{skuStats[0].inv.available}</td>
                     <td rowSpan={rowSpan}>
-                        <input className="order-input" type="number" value={order} onChange={e => updateCellOrder(sizeIdx, colour, e.target.value)} />
+                        <input className="order-input" type="number" value={order} onChange={e => updateCellOrder(sizeIdx, colour, e.target.value)} disabled={!canWrite} />
                     </td>
                     <td rowSpan={rowSpan} style={totalStyle}>{parseFloat(total.toFixed(2))}</td>
                     <td rowSpan={rowSpan} style={{ fontWeight: 'bold', color: 'var(--primary-color)' }}>{parseFloat(cellTotalSale.toFixed(2))}</td>
@@ -725,13 +700,15 @@ export default function Reports() {
         setReportSortDir(prev => prev === 'az' ? 'za' : 'az');
     };
 
-    const sortedReports = [...reports].sort((a, b) => {
-        const nameA = (a.name || '').toLowerCase();
-        const nameB = (b.name || '').toLowerCase();
-        if (nameA < nameB) return reportSortDir === 'az' ? -1 : 1;
-        if (nameA > nameB) return reportSortDir === 'az' ? 1 : -1;
-        return 0;
-    });
+    const sortedReports = [...reports]
+        .filter(r => (r.name || '').toLowerCase().includes(listSearchTerm.toLowerCase()))
+        .sort((a, b) => {
+            const nameA = (a.name || '').toLowerCase();
+            const nameB = (b.name || '').toLowerCase();
+            if (nameA < nameB) return reportSortDir === 'az' ? -1 : 1;
+            if (nameA > nameB) return reportSortDir === 'az' ? 1 : -1;
+            return 0;
+        });
 
     return (
         <div className="reports-layout">
@@ -742,15 +719,35 @@ export default function Reports() {
                         setNewReportName('');
                         setSelectedProducts([]);
                         setShowAddReport(true);
-                    }} style={{ marginBottom: '8px' }}>
+                    }} disabled={!canWrite} style={{ 
+                        marginBottom: '8px',
+                        background: canWrite ? 'var(--primary-color)' : '#d1d5db',
+                        cursor: canWrite ? 'pointer' : 'not-allowed',
+                        opacity: canWrite ? 1 : 0.6
+                    }}>
                         <Plus size={18} /> New Report
                     </button>
-                    <button className="btn-upload btn-full" onClick={updateAllReports} disabled={savingReport} style={{ background: '#3b82f6', color: 'white', border: 'none', marginBottom: '8px' }}>
+                    <button className="btn-upload btn-full" onClick={updateAllReports} disabled={savingReport || !canWrite} style={{ 
+                        background: canWrite ? '#3b82f6' : '#d1d5db',
+                        color: 'white', border: 'none', marginBottom: '8px',
+                        cursor: canWrite ? 'pointer' : 'not-allowed',
+                        opacity: canWrite ? 1 : 0.6
+                    }}>
                         <RefreshCw size={18} /> {savingReport ? 'Updating...' : 'Update All Reports'}
                     </button>
-                    <button className="btn-upload btn-full" onClick={toggleReportSort} style={{ background: 'var(--surface-color)', color: 'var(--text-color)', border: '1px solid var(--border-color)' }}>
+                    <button className="btn-upload btn-full" onClick={toggleReportSort} style={{ background: 'var(--surface-color)', color: 'var(--text-color)', border: '1px solid var(--border-color)', marginBottom: '8px' }}>
                         Sort: {reportSortDir === 'az' ? 'A-Z' : 'Z-A'}
                     </button>
+                    <div style={{ position: 'relative' }}>
+                        <Search size={14} style={{ position: 'absolute', left: '8px', top: '9px', color: '#94a3b8' }} />
+                        <input 
+                            type="text" 
+                            placeholder="Search reports..." 
+                            value={listSearchTerm}
+                            onChange={(e) => setListSearchTerm(e.target.value)}
+                            style={{ width: '100%', padding: '6px 8px 6px 28px', border: '1px solid var(--border-color)', borderRadius: '4px', background: 'var(--bg-color)', color: 'var(--text-color)', fontSize: '0.85rem' }}
+                        />
+                    </div>
                 </div>
                 <div className="reports-list">
                     {sortedReports.map(r => (
@@ -760,7 +757,7 @@ export default function Reports() {
                             onClick={() => loadReportData(r.id)}
                         >
                             <span>{r.name}</span>
-                            <Trash2 size={14} style={{ opacity: 0.6 }} onClick={(e) => { e.stopPropagation(); deleteReport(r.id); }} />
+                            {canWrite && <Trash2 size={14} style={{ opacity: 0.6 }} onClick={(e) => { e.stopPropagation(); deleteReport(r.id); }} />}
                         </div>
                     ))}
                     {reports.length === 0 && <div style={{ padding: '12px', color: '#64748b', fontSize: '0.9rem', textAlign: 'center' }}>No reports yet</div>}
@@ -775,14 +772,16 @@ export default function Reports() {
                         <div className="report-topbar">
                             <div className="report-title-area">
                                 <h2>{activeReport.name}</h2>
-                                <button className="btn-upload" style={{ margin: '5px 15px 0', background: 'transparent', border: '1px solid #cbd5e1', color: '#64748b', padding: '4px 8px', fontSize: '12px', float: 'left' }} onClick={() => {
-                                    setEditReportId(activeReport.id);
-                                    setNewReportName(activeReport.name);
-                                    setSelectedProducts(activeReport.data?.productNames || []);
-                                    setShowAddReport(true);
-                                }}>
-                                    Edit Settings
-                                </button>
+                                {canWrite && (
+                                    <button className="btn-upload" style={{ margin: '5px 15px 0', background: 'transparent', border: '1px solid #cbd5e1', color: '#64748b', padding: '4px 8px', fontSize: '12px', float: 'left' }} onClick={() => {
+                                        setEditReportId(activeReport.id);
+                                        setNewReportName(activeReport.name);
+                                        setSelectedProducts(activeReport.data?.productNames || []);
+                                        setShowAddReport(true);
+                                    }}>
+                                        Edit Settings
+                                    </button>
+                                )}
                                 <div className="date-picker-row">
                                     <label>Start Date:</label>
                                     <input
@@ -808,81 +807,137 @@ export default function Reports() {
                                     <button className="btn-upload" onClick={exportReportHTML} style={{ background: '#f8fafc', color: '#1e293b', border: '1px solid #cbd5e1' }}>
                                         <Download size={16} /> Export HTML
                                     </button>
-                                    <button className="btn-upload" onClick={autoGenerate} style={{ background: 'var(--bg-color)', color: 'var(--text-color)' }}>
-                                        <Sparkles size={16} /> Auto Generate
-                                    </button>
-                                    <button className="btn-upload" onClick={saveReportData} disabled={savingReport}>
-                                        <Save size={16} /> {savingReport ? 'Saving...' : 'Save Report'}
-                                    </button>
+                                    {canWrite && (
+                                        <button className="btn-upload" onClick={autoGenerate} style={{ background: 'var(--bg-color)', color: 'var(--text-color)' }}>
+                                            <Sparkles size={16} /> Auto Generate
+                                        </button>
+                                    )}
+                                    {canWrite && (
+                                        <button className="btn-upload" onClick={saveReportData} disabled={savingReport}>
+                                            <Save size={16} /> {savingReport ? 'Saving...' : 'Save Report'}
+                                        </button>
+                                    )}
                                 </div>
                             </div>
                         </div>
 
-                        <div className="finish-tabs-bar">
-                            {activeReport.data.finishes.map((f, i) => (
-                                <button
-                                    key={i}
-                                    className={`finish-tab ${activeFinishIdx === i ? 'active' : ''}`}
-                                    onClick={() => setActiveFinishIdx(i)}
-                                >
-                                    {f.name}
-                                    {activeFinishIdx === i && <Trash2 size={14} style={{ marginLeft: '5px', marginBottom: '-1px', opacity: 0.5, color: '#ef4444' }} onClick={(e) => { e.stopPropagation(); deleteFinishTab(i); }} />}
-                                </button>
-                            ))}
-                            <button className="finish-tab" onClick={() => setShowAddFinish(true)} style={{ color: 'var(--primary-color)' }}>
-                                + Add Finish
-                            </button>
-                        </div>
-
-                        <div className="grand-matrix-container">
-                            {activeReport.data.finishes.length === 0 ? (
-                                <div style={{ color: '#64748b', marginTop: '24px' }}>Add a Finish tab to start building tables.</div>
-                            ) : (
-                                <div className="sizes-horizontal-scroll">
-                                    {activeReport.data.finishes[activeFinishIdx].sizes.map((size, sizeIdx) => (
-                                        <div className="size-table-card" key={size.name}>
-                                            <div className="size-header" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                                                <h3>Size: {size.name}</h3>
-                                                <Trash2 size={16} style={{ cursor: 'pointer', opacity: 0.5 }} onClick={() => handleDeleteSize(sizeIdx)} />
-                                            </div>
-                                            <table className="report-table">
-                                                <thead>
-                                                    <tr>
-                                                        <th style={{ width: '120px' }}>Colour</th>
-                                                        <th>SKU</th>
-                                                        <th>In-date</th>
-                                                        <th className="num">Available</th>
-                                                        <th className="num" style={{ width: '80px' }}>Order</th>
-                                                        <th className="num" style={{ width: '80px' }}>Total</th>
-                                                        <th className="num" style={{ width: '80px' }}>Sale</th>
-                                                        <th className="num" style={{ width: '80px' }}>Cycle</th>
-                                                    </tr>
-                                                </thead>
-                                                <tbody>
-                                                    {activeReport.data.finishes[activeFinishIdx].colours
-                                                        .filter(colour => !size.cells[colour]?.deleted)
-                                                        .map(colour => (
-                                                            renderCellRows(sizeIdx, size, colour)
-                                                        ))}
-                                                    <tr>
-                                                        <td colSpan="8" style={{ textAlign: 'center', backgroundColor: 'var(--bg-color)' }}>
-                                                            <span className="action-text" onClick={() => setShowAddColour(true)}>+ Add New Colour Row</span>
-                                                        </td>
-                                                    </tr>
-                                                </tbody>
-                                            </table>
-                                        </div>
-                                    ))}
-
-                                    <div className="size-table-card" style={{ minWidth: '992px', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '48px', cursor: 'pointer', backgroundColor: 'transparent', borderStyle: 'dashed' }} onClick={() => setShowAddSize(true)}>
-                                        <div style={{ textAlign: 'center', color: 'var(--primary-color)' }}>
-                                            <PlusCircle size={32} style={{ margin: '0 auto 12px' }} />
-                                            <div style={{ fontWeight: 600 }}>Add Size Table</div>
-                                        </div>
+                        <DragDropContext onDragEnd={handleDragEnd}>
+                            <Droppable droppableId="finishes" type="finishes" direction="horizontal" isDropDisabled={!canWrite}>
+                                {(provided) => (
+                                    <div className="finish-tabs-bar" ref={provided.innerRef} {...provided.droppableProps}>
+                                        {activeReport.data.finishes.map((f, i) => (
+                                            <Draggable key={`finish-${f.name}`} draggableId={`finish-${f.name}`} index={i} isDragDisabled={!canWrite}>
+                                                {(provided, snapshot) => (
+                                                    <div
+                                                        ref={provided.innerRef}
+                                                        {...provided.draggableProps}
+                                                        {...provided.dragHandleProps}
+                                                        className={`finish-tab ${activeFinishIdx === i ? 'active' : ''}`}
+                                                        onClick={() => setActiveFinishIdx(i)}
+                                                        style={{
+                                                            ...provided.draggableProps.style,
+                                                            opacity: snapshot.isDragging ? 0.9 : 1,
+                                                            boxShadow: snapshot.isDragging ? '0 4px 12px rgba(0,0,0,0.1)' : 'none',
+                                                            cursor: canWrite ? 'grab' : 'pointer'
+                                                        }}
+                                                    >
+                                                        {f.name}
+                                                        {canWrite && activeFinishIdx === i && <Trash2 size={14} style={{ marginLeft: '5px', marginBottom: '-1px', opacity: 0.5, color: '#ef4444' }} onClick={(e) => { e.stopPropagation(); deleteFinishTab(i); }} />}
+                                                    </div>
+                                                )}
+                                            </Draggable>
+                                        ))}
+                                        {provided.placeholder}
+                                        {canWrite && (
+                                            <button className="finish-tab" onClick={() => setShowAddFinish(true)} style={{ color: 'var(--primary-color)' }}>
+                                                + Add Finish
+                                            </button>
+                                        )}
                                     </div>
-                                </div>
-                            )}
+                                )}
+                            </Droppable>
 
+                            <div className="grand-matrix-container">
+                                {activeReport.data.finishes.length === 0 ? (
+                                    <div style={{ color: '#64748b', marginTop: '24px' }}>Add a Finish tab to start building tables.</div>
+                                ) : (
+                                    <Droppable droppableId="sizes" type="sizes" direction="vertical" isDropDisabled={!canWrite}>
+                                        {(provided) => (
+                                            <div className="sizes-horizontal-scroll" ref={provided.innerRef} {...provided.droppableProps}>
+                                                {activeReport.data.finishes[activeFinishIdx].sizes.map((size, sizeIdx) => (
+                                                    <Draggable key={`size-${size.name}`} draggableId={`size-${size.name}`} index={sizeIdx} isDragDisabled={!canWrite}>
+                                                        {(provided, snapshot) => (
+                                                            <div 
+                                                                className="size-table-card" 
+                                                                ref={provided.innerRef}
+                                                                {...provided.draggableProps}
+                                                                style={{
+                                                                    ...provided.draggableProps.style,
+                                                                    opacity: snapshot.isDragging ? 0.95 : 1,
+                                                                    boxShadow: snapshot.isDragging ? '0 12px 30px rgba(0,0,0,0.15)' : undefined
+                                                                }}
+                                                            >
+                                                                <div className="size-header" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                                                                    <div style={{ display: 'flex', alignItems: 'center' }}>
+                                                                        {canWrite && (
+                                                                            <div 
+                                                                                style={{ cursor: 'grab', marginRight: '8px', color: '#94a3b8', display: 'flex', alignItems: 'center' }} 
+                                                                                {...provided.dragHandleProps}
+                                                                            >
+                                                                                <GripVertical size={18} />
+                                                                            </div>
+                                                                        )}
+                                                                        <h3 style={{ margin: 0 }}>Size: {size.name}</h3>
+                                                                    </div>
+                                                                    {canWrite && <Trash2 size={16} style={{ cursor: 'pointer', opacity: 0.5 }} onClick={() => handleDeleteSize(sizeIdx)} />}
+                                                                </div>
+                                                                <table className="report-table">
+                                                                    <thead>
+                                                                        <tr>
+                                                                            <th style={{ width: '120px' }}>Colour</th>
+                                                                            <th>SKU</th>
+                                                                            <th>In-date</th>
+                                                                            <th className="num">Available</th>
+                                                                            <th className="num" style={{ width: '80px' }}>Order</th>
+                                                                            <th className="num" style={{ width: '80px' }}>Total</th>
+                                                                            <th className="num" style={{ width: '80px' }}>Sale</th>
+                                                                            <th className="num" style={{ width: '80px' }}>Cycle</th>
+                                                                        </tr>
+                                                                    </thead>
+                                                                    <tbody>
+                                                                        {activeReport.data.finishes[activeFinishIdx].colours
+                                                                            .filter(colour => !size.cells[colour]?.deleted)
+                                                                            .map(colour => (
+                                                                                renderCellRows(sizeIdx, size, colour)
+                                                                            ))}
+                                                                        {canWrite && (
+                                                                            <tr>
+                                                                                <td colSpan="8" style={{ textAlign: 'center', backgroundColor: 'var(--bg-color)' }}>
+                                                                                    <span className="action-text" onClick={() => setShowAddColour(true)}>+ Add New Colour Row</span>
+                                                                                </td>
+                                                                            </tr>
+                                                                        )}
+                                                                    </tbody>
+                                                                </table>
+                                                            </div>
+                                                        )}
+                                                    </Draggable>
+                                                ))}
+                                                {provided.placeholder}
+                                                {canWrite && (
+                                                    <div className="size-table-card" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '48px', cursor: 'pointer', backgroundColor: 'transparent', borderStyle: 'dashed' }} onClick={() => setShowAddSize(true)}>
+                                                        <div style={{ textAlign: 'center', color: 'var(--primary-color)' }}>
+                                                            <PlusCircle size={32} style={{ margin: '0 auto 12px' }} />
+                                                            <div style={{ fontWeight: 600 }}>Add Size Table</div>
+                                                        </div>
+                                                    </div>
+                                                )}
+                                            </div>
+                                        )}
+                                    </Droppable>
+                                )}
+                            </div>
+                        </DragDropContext>
                             {activeReport.data.unmappedSkus && activeReport.data.unmappedSkus.length > 0 && (
                                 <div style={{ marginTop: '32px', borderTop: '1px solid var(--border-color)', paddingTop: '24px' }}>
                                     <h3 style={{ color: '#991b1b', marginBottom: '16px' }}>Unmapped SKUs (Missing Parameters)</h3>
@@ -912,7 +967,6 @@ export default function Reports() {
                                     </table>
                                 </div>
                             )}
-                        </div>
                     </>
                 )}
             </div>

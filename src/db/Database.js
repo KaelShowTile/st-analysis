@@ -1,11 +1,27 @@
 import Database from '@tauri-apps/plugin-sql';
+import { load } from '@tauri-apps/plugin-store';
 
 let dbPromise = null;
+
+export const getDbPath = async () => {
+    const store = await load('settings.json', { autoSave: false });
+    const customPath = await store.get('customDbPath');
+    return customPath || null;
+};
 
 export const getDb = async () => {
     if (!dbPromise) {
         dbPromise = (async () => {
-            const db = await Database.load('sqlite:inventory.db');
+            const store = await load('settings.json', { autoSave: false });
+            const customPath = await store.get('customDbPath');
+            
+            // For plugin-sql, absolute paths must be prefixed with sqlite:
+            let connectionString = 'sqlite:inventory.db';
+            if (customPath) {
+                connectionString = `sqlite:${customPath}`;
+            }
+
+            const db = await Database.load(connectionString);
             await initializeTables(db);
             return db;
         })();
@@ -119,5 +135,29 @@ const initializeTables = async (db) => {
         await db.execute('ALTER TABLE reports ADD COLUMN start_date TEXT');
     } catch (e) {
         // Column likely already exists
+    }
+
+    // Auth System
+    await db.execute(`
+        CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT UNIQUE,
+            password TEXT,
+            permissions TEXT
+        )
+    `);
+
+    const usersCount = await db.select("SELECT COUNT(*) as count FROM users");
+    if (usersCount[0].count === 0) {
+        const fullPermissions = JSON.stringify({
+            inventory: { read: true, write: true },
+            sales: { read: true, write: true },
+            reports: { read: true, write: true },
+            settings: { read: true, write: true }
+        });
+        await db.execute(
+            "INSERT INTO users (username, password, permissions) VALUES ($1, $2, $3)", 
+            ['admin', 'admin123', fullPermissions]
+        );
     }
 };

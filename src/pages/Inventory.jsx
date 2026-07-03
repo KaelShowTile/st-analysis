@@ -4,7 +4,7 @@ import { Upload, Search, Trash2, Edit3, X, Save } from 'lucide-react';
 import { getDb } from '../db/Database';
 import './Inventory.css';
 
-export default function Inventory() {
+export default function Inventory({ currentUser }) {
     const [data, setData] = useState([]);
     const [loading, setLoading] = useState(true);
     const [searchTerm, setSearchTerm] = useState('');
@@ -13,6 +13,8 @@ export default function Inventory() {
     const [sortConfig, setSortConfig] = useState({ key: null, direction: 'asc' });
     const [editModal, setEditModal] = useState({ show: false, item: null, field: '', val: '', options: [] });
     const fileInputRef = useRef(null);
+
+    const canWrite = currentUser?.permissions?.inventory?.write;
 
     const loadData = async (showSpinner = false) => {
         if (showSpinner) setLoading(true);
@@ -36,6 +38,7 @@ export default function Inventory() {
     }, []);
 
     const processData = async (parsedData) => {
+        if (!canWrite) return;
         setLoading(true);
         try {
             const db = await getDb();
@@ -209,6 +212,7 @@ export default function Inventory() {
     };
 
     const handleClearAll = async () => {
+        if (!canWrite) return;
         if (!window.confirm("Are you sure you want to delete all inventory data? This cannot be undone.")) return;
         setLoading(true);
         try {
@@ -223,6 +227,7 @@ export default function Inventory() {
     };
 
     const handleFileUpload = (e) => {
+        if (!canWrite) return;
         const file = e.target.files[0];
         if (!file) return;
 
@@ -251,52 +256,36 @@ export default function Inventory() {
     };
 
     const handleSaveEdit = async () => {
-        if (!editModal.item) return;
-        setLoading(true);
+        if (!canWrite) return;
         try {
             const db = await getDb();
-            const { field, val, item } = editModal;
-
-            await db.execute(`UPDATE inventory SET ${field} = $1 WHERE product_id = $2`, [val, item.product_id]);
-
-            setData(prev => prev.map(row =>
-                row.product_id === item.product_id ? { ...row, [field]: val } : row
-            ));
-
-            setEditModal({ show: false, item: null, field: '', val: '', options: [] });
+            await db.execute(
+                `UPDATE inventory SET ${editModal.field} = $1 WHERE sku = $2`,
+                [editModal.val, editModal.item.sku]
+            );
+            setEditModal({ ...editModal, show: false });
+            loadData();
         } catch (err) {
-            console.error("Failed to save edit", err);
-            alert("Save failed");
-        } finally {
-            setLoading(false);
+            console.error("Failed to update item", err);
+            alert("Failed to update item");
         }
     };
 
-    const filteredData = data.filter(item =>
-        (item.sku && item.sku.toLowerCase().includes(searchTerm.toLowerCase())) ||
-        (item.extracted_name && item.extracted_name.toLowerCase().includes(searchTerm.toLowerCase()))
-    );
+    let filteredData = data.filter(item => {
+        const term = searchTerm.toLowerCase();
+        return (item.sku && String(item.sku).toLowerCase().includes(term)) ||
+               (item.sales_description && item.sales_description.toLowerCase().includes(term));
+    });
 
-    const sortedData = [...filteredData];
     if (sortConfig.key) {
-        sortedData.sort((a, b) => {
-            const valA = a[sortConfig.key] || '';
-            const valB = b[sortConfig.key] || '';
-
-            const numericKeys = ['available', 'holding', 'so_qty', 'total_qty'];
-            if (numericKeys.includes(sortConfig.key)) {
-                return sortConfig.direction === 'asc' ? Number(valA) - Number(valB) : Number(valB) - Number(valA);
-            }
-
-            const strA = String(valA).toLowerCase();
-            const strB = String(valB).toLowerCase();
-            if (strA < strB) return sortConfig.direction === 'asc' ? -1 : 1;
-            if (strA > strB) return sortConfig.direction === 'asc' ? 1 : -1;
+        filteredData.sort((a, b) => {
+            if (a[sortConfig.key] < b[sortConfig.key]) return sortConfig.direction === 'asc' ? -1 : 1;
+            if (a[sortConfig.key] > b[sortConfig.key]) return sortConfig.direction === 'asc' ? 1 : -1;
             return 0;
         });
     }
 
-    const displayedData = sortedData.slice(0, renderLimit);
+    const displayedData = filteredData.slice(0, renderLimit);
 
     return (
         <div className="inventory-container">
@@ -322,8 +311,14 @@ export default function Inventory() {
                     <button
                         className="btn-upload"
                         onClick={handleClearAll}
-                        disabled={loading}
-                        style={{ background: 'linear-gradient(135deg, #ef4444 0%, #dc2626 100%)', boxShadow: '0 4px 6px rgba(239, 68, 68, 0.25)' }}
+                        disabled={loading || !canWrite}
+                        style={{ 
+                            background: canWrite ? 'linear-gradient(135deg, #ef4444 0%, #dc2626 100%)' : '#d1d5db',
+                            boxShadow: canWrite ? '0 4px 6px rgba(239, 68, 68, 0.25)' : 'none',
+                            cursor: canWrite ? 'pointer' : 'not-allowed',
+                            opacity: canWrite ? 1 : 0.6
+                        }}
+                        title={!canWrite ? 'You do not have permission to clear data' : ''}
                     >
                         <Trash2 size={16} />
                         Clear All
@@ -334,11 +329,18 @@ export default function Inventory() {
                         ref={fileInputRef}
                         onChange={handleFileUpload}
                         style={{ display: 'none' }}
+                        disabled={!canWrite}
                     />
                     <button
                         className="btn-upload"
                         onClick={() => fileInputRef.current.click()}
-                        disabled={loading}
+                        disabled={loading || !canWrite}
+                        style={{
+                            background: canWrite ? 'var(--primary-color)' : '#d1d5db',
+                            cursor: canWrite ? 'pointer' : 'not-allowed',
+                            opacity: canWrite ? 1 : 0.6
+                        }}
+                        title={!canWrite ? 'You do not have permission to upload' : ''}
                     >
                         <Upload size={16} />
                         {loading ? 'Processing...' : 'Import CSV'}
@@ -378,20 +380,20 @@ export default function Inventory() {
                                         <span className="sku-badge">{item.sku}</span>
                                         {item.backorder === 1 && <span className="param-badge" style={{ backgroundColor: '#fecaca', color: '#991b1b', marginLeft: '6px' }}>Backorder</span>}
                                     </td>
-                                    <td className="product-name editable-cell" title="Click to edit" onClick={() => setEditModal({ show: true, item, field: 'extracted_name', val: item.extracted_name || '', options: [] })}>
-                                        {item.extracted_name} <Edit3 size={12} className="edit-icon" />
+                                    <td className={canWrite ? "product-name editable-cell" : "product-name"} title={canWrite ? "Click to edit" : ""} onClick={() => canWrite && setEditModal({ show: true, item, field: 'extracted_name', val: item.extracted_name || '', options: [] })}>
+                                        {item.extracted_name} {canWrite && <Edit3 size={12} className="edit-icon" />}
                                     </td>
-                                    <td className="editable-cell" title="Click to edit" onClick={() => setEditModal({ show: true, item, field: 'extracted_colour', val: item.extracted_colour || '', options: attributes.colours })}>
+                                    <td className={canWrite ? "editable-cell" : ""} title={canWrite ? "Click to edit" : ""} onClick={() => canWrite && setEditModal({ show: true, item, field: 'extracted_colour', val: item.extracted_colour || '', options: attributes.colours })}>
                                         {item.extracted_colour && <span className="param-badge colour">{item.extracted_colour}</span>}
-                                        <Edit3 size={12} className="edit-icon" />
+                                        {canWrite && <Edit3 size={12} className="edit-icon" />}
                                     </td>
-                                    <td className="editable-cell" title="Click to edit" onClick={() => setEditModal({ show: true, item, field: 'extracted_finish', val: item.extracted_finish || '', options: attributes.finishes })}>
+                                    <td className={canWrite ? "editable-cell" : ""} title={canWrite ? "Click to edit" : ""} onClick={() => canWrite && setEditModal({ show: true, item, field: 'extracted_finish', val: item.extracted_finish || '', options: attributes.finishes })}>
                                         {item.extracted_finish && <span className="param-badge finish">{item.extracted_finish}</span>}
-                                        <Edit3 size={12} className="edit-icon" />
+                                        {canWrite && <Edit3 size={12} className="edit-icon" />}
                                     </td>
-                                    <td className="editable-cell" title="Click to edit" onClick={() => setEditModal({ show: true, item, field: 'extracted_size', val: item.extracted_size || '', options: [] })}>
+                                    <td className={canWrite ? "editable-cell" : ""} title={canWrite ? "Click to edit" : ""} onClick={() => canWrite && setEditModal({ show: true, item, field: 'extracted_size', val: item.extracted_size || '', options: [] })}>
                                         {item.extracted_size && <span className="param-badge size">{item.extracted_size}</span>}
-                                        <Edit3 size={12} className="edit-icon" />
+                                        {canWrite && <Edit3 size={12} className="edit-icon" />}
                                     </td>
                                     <td className="num">{item.available}</td>
                                     <td className="num">{item.holding}</td>
@@ -401,7 +403,7 @@ export default function Inventory() {
                             ))}
                             {filteredData.length === 0 && (
                                 <tr>
-                                    <td colSpan="7" className="empty-state">
+                                    <td colSpan="10" className="empty-state">
                                         {loading ? 'Loading...' : 'No inventory data found.'}
                                     </td>
                                 </tr>
