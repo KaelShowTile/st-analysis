@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Home, LayoutDashboard, Settings as SettingsIcon, Sun, Moon, Receipt, BarChart2, LogOut } from 'lucide-react';
+import { Home, LayoutDashboard, Settings as SettingsIcon, Sun, Moon, Receipt, BarChart2, LogOut, Box } from 'lucide-react';
 import { getDb, getDbPath } from './db/Database';
 import { appDataDir, join } from '@tauri-apps/api/path';
 import { copyFile, mkdir, readDir, remove, exists } from '@tauri-apps/plugin-fs';
@@ -8,6 +8,7 @@ import Dashboard from './pages/Dashboard';
 import Inventory from './pages/Inventory';
 import Sales from './pages/Sales';
 import Reports from './pages/Reports';
+import Containers from './pages/Containers';
 import Settings from './pages/Settings';
 import Login from './pages/Login';
 
@@ -65,6 +66,17 @@ function App() {
           const savedTheme = result[0].value;
           setTheme(savedTheme !== 'system' ? savedTheme : 'light');
         }
+        
+        // Refresh current user permissions from DB to handle newly added permissions
+        if (currentUser) {
+            const freshUser = await db.select("SELECT * FROM users WHERE id = $1", [currentUser.id]);
+            if (freshUser.length > 0) {
+                const updatedUser = { ...freshUser[0], permissions: JSON.parse(freshUser[0].permissions) };
+                setCurrentUser(updatedUser);
+                localStorage.setItem('currentUser', JSON.stringify(updatedUser));
+            }
+        }
+
         setDbReady(true);
       } catch (err) {
         console.error("Failed to initialize DB:", err);
@@ -142,6 +154,12 @@ function App() {
                   Reports
                 </li>
             )}
+            {p.containers?.read && (
+                <li className={`nav-item ${activeTab === 'containers' ? 'active' : ''}`} onClick={() => navigateTo('containers')}>
+                  <Box size={18} />
+                  Containers
+                </li>
+            )}
             {p.settings?.read && (
                 <li className={`nav-item ${activeTab === 'settings' ? 'active' : ''}`} onClick={() => navigateTo('settings')}>
                   <SettingsIcon size={18} />
@@ -168,6 +186,7 @@ function App() {
           {activeTab === 'inventory' && p.inventory?.read && <Inventory currentUser={currentUser} />}
           {activeTab === 'sales' && p.sales?.read && <Sales currentUser={currentUser} />}
           {activeTab === 'reports' && p.reports?.read && <Reports currentUser={currentUser} initialReportId={selectedReportId} />}
+          {activeTab === 'containers' && p.containers?.read && <Containers currentUser={currentUser} />}
           {activeTab === 'settings' && p.settings?.read && <Settings currentUser={currentUser} />}
         </div>
       </div>

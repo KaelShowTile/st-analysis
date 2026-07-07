@@ -1,0 +1,178 @@
+.containers-layout {
+    display: flex;
+    height: 100%;
+    background-color: var(--bg-color);
+}
+
+.containers-sidebar {
+    width: 200px;
+    background-color: var(--surface-color);
+    border-right: 1px solid var(--border-color);
+    display: flex;
+    flex-direction: column;
+}
+
+.sidebar-header {
+    padding: 20px;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.sidebar-header h3 {
+    margin: 0;
+    font-size: 1.1rem;
+    color: var(--text-color);
+}
+
+.year-list {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+    overflow-y: auto;
+    flex: 1;
+}
+
+.year-item {
+    padding: 12px 20px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    color: var(--text-color);
+    border-bottom: 1px solid var(--border-color);
+    transition: background-color 0.2s;
+    font-weight: 500;
+}
+
+.year-item:hover {
+    background-color: var(--bg-color);
+}
+
+.year-item.active {
+    background-color: var(--primary-color);
+    color: white;
+}
+
+.containers-main {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+.main-header {
+    padding: 20px 32px;
+    background-color: var(--surface-color);
+    border-bottom: 1px solid var(--border-color);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.header-actions {
+    display: flex;
+    gap: 12px;
+}
+
+.table-container {
+    flex: 1;
+    overflow: auto;
+    padding: 24px 32px;
+}
+
+.excel-table-wrapper {
+    background: white;
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    overflow: auto;
+    box-shadow: var(--shadow-sm);
+    max-height: 100%;
+}
+
+.excel-table {
+    border-collapse: collapse;
+    width: max-content;
+}
+
+.excel-table th, .excel-table td {
+    border: 1px solid var(--border-color);
+    padding: 0;
+    margin: 0;
+}
+
+.excel-table th {
+    background-color: #f8fafc;
+    color: #475569;
+    font-weight: 600;
+    padding: 10px;
+    text-align: left;
+    font-size: 0.85rem;
+    position: sticky;
+    top: 0;
+    z-index: 10;
+}
+
+.excel-table td {
+    position: relative;
+    background-color: #ffffff;
+}
+
+.readonly-cell {
+    padding: 8px 10px;
+    font-size: 0.85rem;
+    color: #64748b;
+    font-family: monospace;
+    background-color: #f8fafc;
+    height: 100%;
+    display: flex;
+    align-items: center;
+}
+
+.excel-input {
+    width: 100%;
+    height: 100%;
+    border: none;
+    outline: none;
+    padding: 8px 10px;
+    font-size: 0.85rem;
+    color: var(--text-color);
+    background: transparent;
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+}
+
+.excel-input:focus {
+    box-shadow: inset 0 0 0 2px var(--primary-color);
+    background-color: #fff;
+    z-index: 1;
+    position: relative;
+}
+
+.excel-input:disabled {
+    background-color: transparent;
+    color: var(--text-color);
+    cursor: default;
+}
+
+.excel-input[type="date"] {
+    font-family: monospace;
+}
+
+/* Sub-Navigation Styles */
+.subnav-btn {
+    background: none;
+    border: none;
+    padding: 8px 16px;
+    font-size: 14px;
+    font-weight: 500;
+    color: var(--text-color);
+    cursor: pointer;
+    border-radius: 4px;
+    transition: background-color 0.2s, color 0.2s;
+}
+
+.subnav-btn:hover {
+    background-color: var(--border-color);
+}
+
+.subnav-btn.active {
+    background-color: var(--primary-color);
+    color: white;
+}

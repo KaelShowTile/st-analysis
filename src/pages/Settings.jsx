@@ -26,7 +26,8 @@ export default function Settings({ currentUser }) {
             inventory: { read: false, write: false },
             sales: { read: false, write: false },
             reports: { read: false, write: false },
-            settings: { read: false, write: false }
+            settings: { read: false, write: false },
+            containers: { read: false, write: false }
         }
     });
 
@@ -366,7 +367,8 @@ export default function Settings({ currentUser }) {
                                     inventory: { read: false, write: false },
                                     sales: { read: false, write: false },
                                     reports: { read: false, write: false },
-                                    settings: { read: false, write: false }
+                                    settings: { read: false, write: false },
+                                    containers: { read: false, write: false }
                                 }
                             });
                             setShowUserModal(true);

@@ -19,11 +19,11 @@
     "store:default",
     {
       "identifier": "fs:allow-exists",
-      "allow": [{ "path": "$APPDATA/**" }, { "path": "$APPCONFIG/**" }]
+      "allow": [{ "path": "$APPDATA/**" }, { "path": "$APPCONFIG/**" }, { "path": "$APPDATA" }]
     },
     {
       "identifier": "fs:allow-mkdir",
-      "allow": [{ "path": "$APPDATA/**" }, { "path": "$APPCONFIG/**" }]
+      "allow": [{ "path": "$APPDATA/**" }, { "path": "$APPCONFIG/**" }, { "path": "$APPDATA" }]
     },
     {
       "identifier": "fs:allow-copy-file",

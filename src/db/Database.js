@@ -1,5 +1,7 @@
 import Database from '@tauri-apps/plugin-sql';
 import { load } from '@tauri-apps/plugin-store';
+import { appDataDir, join } from '@tauri-apps/api/path';
+import { exists, mkdir } from '@tauri-apps/plugin-fs';
 
 let dbPromise = null;
 
@@ -14,11 +16,17 @@ export const getDb = async () => {
         dbPromise = (async () => {
             const store = await load('settings.json', { autoSave: false });
             const customPath = await store.get('customDbPath');
-            
-            // For plugin-sql, absolute paths must be prefixed with sqlite:
-            let connectionString = 'sqlite:inventory.db';
+
+            let connectionString;
             if (customPath) {
                 connectionString = `sqlite:${customPath}`;
+            } else {
+                const appDir = await appDataDir();
+                if (!(await exists(appDir))) {
+                    await mkdir(appDir, { recursive: true });
+                }
+                const defaultDbPath = await join(appDir, 'inventory.db');
+                connectionString = `sqlite:${defaultDbPath}`;
             }
 
             const db = await Database.load(connectionString);
@@ -111,7 +119,37 @@ const initializeTables = async (db) => {
     } catch (e) {
         console.warn("Could not drop unique index on sales.", e);
     }
-    
+
+    await db.execute(`
+        CREATE TABLE IF NOT EXISTS shippers (
+            shipper_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            shipper_name TEXT,
+            payment_term TEXT
+        )
+    `);
+
+    await db.execute(`
+        CREATE TABLE IF NOT EXISTS containers (
+            container_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            year INTEGER,
+            seq INTEGER,
+            shipper TEXT,
+            invoice_no TEXT,
+            payment TEXT,
+            doc TEXT,
+            contents TEXT,
+            hbl_no TEXT,
+            cntr_no TEXT,
+            pol TEXT,
+            etd TEXT,
+            eta TEXT,
+            delivery TEXT,
+            info TEXT,
+            internal_memo TEXT,
+            last_free_dtn TEXT
+        )
+    `);
+
     // Check if theme setting exists, if not set to system or dark
     const result = await db.select("SELECT value FROM settings WHERE key = 'theme'");
     if (result.length === 0) {
@@ -121,20 +159,22 @@ const initializeTables = async (db) => {
     // Migrations
     try {
         await db.execute('ALTER TABLE inventory ADD COLUMN backorder INTEGER DEFAULT 0');
-    } catch (e) {
-        // Column likely already exists
-    }
-    
+    } catch (e) {}
+
     try {
         await db.execute('ALTER TABLE inventory ADD COLUMN backorder_amount REAL DEFAULT 0');
-    } catch (e) {
-        // Column likely already exists
-    }
+    } catch (e) {}
 
     try {
         await db.execute('ALTER TABLE reports ADD COLUMN start_date TEXT');
-    } catch (e) {
-        // Column likely already exists
+    } catch (e) {}
+
+    // Container migrations
+    const containerCols = ['original_eta', 'product_sku', 'origin', 'destination', 'warehouse_received', 'track_status'];
+    for (const col of containerCols) {
+        try {
+            await db.execute(`ALTER TABLE containers ADD COLUMN ${col} TEXT`);
+        } catch (e) {}
     }
 
     // Auth System
@@ -153,11 +193,26 @@ const initializeTables = async (db) => {
             inventory: { read: true, write: true },
             sales: { read: true, write: true },
             reports: { read: true, write: true },
-            settings: { read: true, write: true }
+            settings: { read: true, write: true },
+            containers: { read: true, write: true }
         });
         await db.execute(
-            "INSERT INTO users (username, password, permissions) VALUES ($1, $2, $3)", 
-            ['admin', 'admin123', fullPermissions]
+            "INSERT INTO users (username, password, permissions) VALUES ($1, $2, $3)",
+            ['showtile', 'showtile123', fullPermissions]
         );
+    } else {
+        // Migration to add containers permissions to existing users
+        const allUsers = await db.select("SELECT id, permissions FROM users");
+        for (const user of allUsers) {
+            try {
+                const p = JSON.parse(user.permissions || '{}');
+                if (!p.containers) {
+                    p.containers = { read: true, write: true };
+                    await db.execute("UPDATE users SET permissions = $1 WHERE id = $2", [JSON.stringify(p), user.id]);
+                }
+            } catch (e) {
+                console.error("Failed to migrate permissions for user", user.id);
+            }
+        }
     }
 };
