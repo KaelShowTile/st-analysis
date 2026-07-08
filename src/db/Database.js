@@ -170,7 +170,7 @@ const initializeTables = async (db) => {
     } catch (e) {}
 
     // Container migrations
-    const containerCols = ['original_eta', 'product_sku', 'origin', 'destination', 'warehouse_received', 'track_status'];
+    const containerCols = ['original_eta', 'product_sku', 'origin', 'destination', 'warehouse_received', 'track_status', 'shippment'];
     for (const col of containerCols) {
         try {
             await db.execute(`ALTER TABLE containers ADD COLUMN ${col} TEXT`);

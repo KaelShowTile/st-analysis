@@ -82,7 +82,9 @@
     background: white;
     border: 1px solid var(--border-color);
     border-radius: 8px;
-    overflow: auto;
+    overflow-x: auto;
+    overflow-y: auto;
+    width: calc(100% - 350px);
     box-shadow: var(--shadow-sm);
     max-height: 100%;
 }
@@ -92,7 +94,8 @@
     width: max-content;
 }
 
-.excel-table th, .excel-table td {
+.excel-table th,
+.excel-table td {
     border: 1px solid var(--border-color);
     padding: 0;
     margin: 0;
