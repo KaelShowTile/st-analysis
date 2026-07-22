@@ -131,39 +131,38 @@ export default function Reports({ currentUser, initialReportId }) {
 
             finish.sizes.forEach((size) => {
                 if (size.deleted) return;
-                const sizeRowSpan = Math.max(1, finish.colours.filter(c => !size.cells[c]?.deleted).reduce((acc, c) => acc + Math.max(1, size.cells[c].skus.length), 0));
+
+                // Calculate sizeRowSpan only including colors that have SKUs
+                const activeColours = finish.colours.filter(c => {
+                    const cell = size.cells[c];
+                    return cell && !cell.deleted && cell.skus && cell.skus.length > 0;
+                });
+
+                if (activeColours.length === 0) {
+                    // If no colors have SKUs, you might want to either skip the size entirely or show one empty row
+                    // Let's just skip the size entirely if it has no active colours, or render a placeholder if needed.
+                    // Assuming we still want to show the size name with a blank row if totally empty:
+                    htmlRows += `<tr><td style="font-weight: bold;">${size.name}</td><td colspan="8" style="color: #94a3b8; font-style: italic;">No SKUs available</td></tr>`;
+                    return;
+                }
+
+                const sizeRowSpan = activeColours.reduce((acc, c) => acc + size.cells[c].skus.length, 0);
                 let isFirstColour = true;
 
-                finish.colours.forEach(colour => {
+                activeColours.forEach(colour => {
                     const cell = size.cells[colour];
-                    if (!cell || cell.deleted) return;
 
                     const { skus, rowSpan, skuStats, cellTotalSale, total, cycle, isLowStock, order } = getCellCalculations(cell, activeReport.start_date, activeReport.end_date, inventoryMap, salesData);
 
                     const totalStyle = isLowStock ? 'background-color: #fef08a; font-weight: bold;' : 'font-weight: bold;';
 
-                    if (skus.length === 0) {
-                        htmlRows += `<tr>`;
-                        if (isFirstColour) {
-                            htmlRows += `<td rowspan="${sizeRowSpan}" style="font-weight: bold;">${size.name}</td>`;
-                            isFirstColour = false;
-                        }
-                        htmlRows += `
-                            <td>${colour}</td>
-                            <td colspan="3" style="color: #94a3b8; font-style: italic;">No SKUs selected</td>
-                            <td>${order}</td>
-                            <td style="${totalStyle}">${total.toFixed(2)}</td>
-                            <td>0</td>
-                            <td>0</td>
-                        </tr>`;
-                    } else {
-                        htmlRows += `<tr>`;
-                        if (isFirstColour) {
-                            htmlRows += `<td rowspan="${sizeRowSpan}" style="font-weight: bold;">${size.name}</td>`;
-                            isFirstColour = false;
-                        }
+                    htmlRows += `<tr>`;
+                    if (isFirstColour) {
+                        htmlRows += `<td rowspan="${sizeRowSpan}" style="font-weight: bold;">${size.name}</td>`;
+                        isFirstColour = false;
+                    }
 
-                        htmlRows += `
+                    htmlRows += `
                             <td rowspan="${rowSpan}">${colour}</td>
                             <td><span class="sku-badge">${skuStats[0].sku}</span></td>
                             <td>${skuStats[0].inv.days || '-'}</td>
@@ -174,16 +173,16 @@ export default function Reports({ currentUser, initialReportId }) {
                             <td rowspan="${rowSpan}" style="font-weight: bold; color: #3b82f6;">${cycle.toFixed(2)}</td>
                         </tr>`;
 
-                        for (let i = 1; i < skuStats.length; i++) {
-                            htmlRows += `
+                    for (let i = 1; i < skuStats.length; i++) {
+                        htmlRows += `
                                 <tr>
                                     <td><span class="sku-badge">${skuStats[i].sku}</span></td>
                                     <td>${skuStats[i].inv.days || '-'}</td>
                                     <td class="num">${skuStats[i].inv.available}</td>
                                 </tr>
                             `;
-                        }
                     }
+
                 });
             });
         });
@@ -417,6 +416,10 @@ export default function Reports({ currentUser, initialReportId }) {
                         backorderSum += Number(b.backorder_amount) || 0;
                     });
                     sz.cells[c].order = backorderSum;
+
+                    if (sz.cells[c].skus.length === 0) {
+                        sz.cells[c].deleted = true;
+                    }
                 });
             });
         });
@@ -719,7 +722,7 @@ export default function Reports({ currentUser, initialReportId }) {
                         setNewReportName('');
                         setSelectedProducts([]);
                         setShowAddReport(true);
-                    }} disabled={!canWrite} style={{ 
+                    }} disabled={!canWrite} style={{
                         marginBottom: '8px',
                         background: canWrite ? 'var(--primary-color)' : '#d1d5db',
                         cursor: canWrite ? 'pointer' : 'not-allowed',
@@ -727,7 +730,7 @@ export default function Reports({ currentUser, initialReportId }) {
                     }}>
                         <Plus size={18} /> New Report
                     </button>
-                    <button className="btn-upload btn-full" onClick={updateAllReports} disabled={savingReport || !canWrite} style={{ 
+                    <button className="btn-upload btn-full" onClick={updateAllReports} disabled={savingReport || !canWrite} style={{
                         background: canWrite ? '#3b82f6' : '#d1d5db',
                         color: 'white', border: 'none', marginBottom: '8px',
                         cursor: canWrite ? 'pointer' : 'not-allowed',
@@ -740,9 +743,9 @@ export default function Reports({ currentUser, initialReportId }) {
                     </button>
                     <div style={{ position: 'relative' }}>
                         <Search size={14} style={{ position: 'absolute', left: '8px', top: '9px', color: '#94a3b8' }} />
-                        <input 
-                            type="text" 
-                            placeholder="Search reports..." 
+                        <input
+                            type="text"
+                            placeholder="Search reports..."
                             value={listSearchTerm}
                             onChange={(e) => setListSearchTerm(e.target.value)}
                             style={{ width: '100%', padding: '6px 8px 6px 28px', border: '1px solid var(--border-color)', borderRadius: '4px', background: 'var(--bg-color)', color: 'var(--text-color)', fontSize: '0.85rem' }}
@@ -867,8 +870,8 @@ export default function Reports({ currentUser, initialReportId }) {
                                                 {activeReport.data.finishes[activeFinishIdx].sizes.map((size, sizeIdx) => (
                                                     <Draggable key={`size-${size.name}`} draggableId={`size-${size.name}`} index={sizeIdx} isDragDisabled={!canWrite}>
                                                         {(provided, snapshot) => (
-                                                            <div 
-                                                                className="size-table-card" 
+                                                            <div
+                                                                className="size-table-card"
                                                                 ref={provided.innerRef}
                                                                 {...provided.draggableProps}
                                                                 style={{
@@ -880,8 +883,8 @@ export default function Reports({ currentUser, initialReportId }) {
                                                                 <div className="size-header" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                                                                     <div style={{ display: 'flex', alignItems: 'center' }}>
                                                                         {canWrite && (
-                                                                            <div 
-                                                                                style={{ cursor: 'grab', marginRight: '8px', color: '#94a3b8', display: 'flex', alignItems: 'center' }} 
+                                                                            <div
+                                                                                style={{ cursor: 'grab', marginRight: '8px', color: '#94a3b8', display: 'flex', alignItems: 'center' }}
                                                                                 {...provided.dragHandleProps}
                                                                             >
                                                                                 <GripVertical size={18} />
@@ -938,35 +941,35 @@ export default function Reports({ currentUser, initialReportId }) {
                                 )}
                             </div>
                         </DragDropContext>
-                            {activeReport.data.unmappedSkus && activeReport.data.unmappedSkus.length > 0 && (
-                                <div style={{ marginTop: '32px', borderTop: '1px solid var(--border-color)', paddingTop: '24px' }}>
-                                    <h3 style={{ color: '#991b1b', marginBottom: '16px' }}>Unmapped SKUs (Missing Parameters)</h3>
-                                    <table className="report-table" style={{ width: 'auto', minWidth: '600px' }}>
-                                        <thead>
-                                            <tr>
-                                                <th>SKU</th>
-                                                <th>Finish</th>
-                                                <th>Size</th>
-                                                <th>Colour</th>
-                                                <th>Days</th>
-                                                <th>Available</th>
+                        {activeReport.data.unmappedSkus && activeReport.data.unmappedSkus.length > 0 && (
+                            <div style={{ marginTop: '32px', borderTop: '1px solid var(--border-color)', paddingTop: '24px' }}>
+                                <h3 style={{ color: '#991b1b', marginBottom: '16px' }}>Unmapped SKUs (Missing Parameters)</h3>
+                                <table className="report-table" style={{ width: 'auto', minWidth: '600px' }}>
+                                    <thead>
+                                        <tr>
+                                            <th>SKU</th>
+                                            <th>Finish</th>
+                                            <th>Size</th>
+                                            <th>Colour</th>
+                                            <th>Days</th>
+                                            <th>Available</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {activeReport.data.unmappedSkus.map(i => (
+                                            <tr key={i.sku}>
+                                                <td><span className="sku-badge">{i.sku}</span></td>
+                                                <td>{i.extracted_finish || <span style={{ color: '#94a3b8' }}>-</span>}</td>
+                                                <td>{i.extracted_size || <span style={{ color: '#94a3b8' }}>-</span>}</td>
+                                                <td>{i.extracted_colour || <span style={{ color: '#94a3b8' }}>-</span>}</td>
+                                                <td>{i.days || '-'}</td>
+                                                <td className="num">{i.available}</td>
                                             </tr>
-                                        </thead>
-                                        <tbody>
-                                            {activeReport.data.unmappedSkus.map(i => (
-                                                <tr key={i.sku}>
-                                                    <td><span className="sku-badge">{i.sku}</span></td>
-                                                    <td>{i.extracted_finish || <span style={{ color: '#94a3b8' }}>-</span>}</td>
-                                                    <td>{i.extracted_size || <span style={{ color: '#94a3b8' }}>-</span>}</td>
-                                                    <td>{i.extracted_colour || <span style={{ color: '#94a3b8' }}>-</span>}</td>
-                                                    <td>{i.days || '-'}</td>
-                                                    <td className="num">{i.available}</td>
-                                                </tr>
-                                            ))}
-                                        </tbody>
-                                    </table>
-                                </div>
-                            )}
+                                        ))}
+                                    </tbody>
+                                </table>
+                            </div>
+                        )}
                     </>
                 )}
             </div>

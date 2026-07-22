@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { getDb, getDbPath } from '../db/Database';
+import { getDb, getDbPath, getSetting, setSetting } from '../db/Database';
 import { save } from '@tauri-apps/plugin-dialog';
 import { writeTextFile } from '@tauri-apps/plugin-fs';
 import './Settings.css';
@@ -15,6 +15,9 @@ export default function Settings({ currentUser }) {
     const [backups, setBackups] = useState([]);
     const [isRestoring, setIsRestoring] = useState(false);
     const [currentDbPath, setCurrentDbPath] = useState('');
+    const [maxContainerTracking, setMaxContainerTracking] = useState(50);
+    const [findTeuApi, setFindTeuApi] = useState('https://findteu.showtile-apis.workers.dev/api');
+    const [findTeuApiKey, setFindTeuApiKey] = useState('TAURI_API_KEY');
 
     const isAdmin = currentUser?.username === 'admin';
     const [users, setUsers] = useState([]);
@@ -32,6 +35,8 @@ export default function Settings({ currentUser }) {
     });
 
     const loadDbPath = async () => {
+        const store = await load('settings.json', { autoSave: false });
+        
         const path = await getDbPath();
         if (path) {
             setCurrentDbPath(path);
@@ -39,6 +44,28 @@ export default function Settings({ currentUser }) {
             const appDir = await appDataDir();
             setCurrentDbPath(await join(appDir, 'inventory.db'));
         }
+
+        const maxTracking = await store.get('max_container_tracking');
+        if (maxTracking !== undefined) {
+            setMaxContainerTracking(parseInt(maxTracking, 10));
+        }
+    };
+
+    const handleSaveMaxTracking = async () => {
+        try {
+            const store = await load('settings.json', { autoSave: false });
+            await store.set('max_container_tracking', maxContainerTracking);
+            await store.save();
+            alert("Maximum container tracking amount saved successfully.");
+        } catch (err) {
+            console.error("Failed to save max tracking limit", err);
+        }
+    };
+
+    const handleSaveFindTeuSettings = async () => {
+        await setSetting('findteu_api_url', findTeuApi);
+        await setSetting('findteu_api_key', findTeuApiKey);
+        alert("findTEU API settings saved successfully.");
     };
 
     const handleMoveDatabase = async () => {
@@ -112,11 +139,19 @@ export default function Settings({ currentUser }) {
         }
     };
 
+    const loadDbSettings = async () => {
+        const url = await getSetting('findteu_api_url', 'https://findteu.showtile-apis.workers.dev/api');
+        const key = await getSetting('findteu_api_key', 'TAURI_API_KEY');
+        setFindTeuApi(url);
+        setFindTeuApiKey(key);
+    };
+
     useEffect(() => {
         loadAttributes();
         loadBackups();
         loadDbPath();
         loadUsers();
+        loadDbSettings();
     }, []);
 
     const handleAdd = async (e) => {
@@ -348,6 +383,69 @@ export default function Settings({ currentUser }) {
                     </div>
                     <button onClick={handleMoveDatabase} className="btn-primary" style={{ flexShrink: 0, marginLeft: '16px' }}>
                         Move Database
+                    </button>
+                </div>
+            </div>
+
+            <div className="settings-card" style={{ marginTop: '24px' }}>
+                <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '16px'}}>
+                    <div>
+                        <h3 style={{margin: '0 0 4px 0'}}>Container Tracking API</h3>
+                        <p className="subtitle" style={{margin: 0}}>Set the maximum number of containers that can be tracked concurrently.</p>
+                    </div>
+                </div>
+
+                <div className="attribute-item" style={{ display: 'flex', justifyContent: 'space-between', padding: '12px 16px', background: 'var(--surface-color)', borderRadius: '6px', border: '1px solid var(--border-color)', alignItems: 'center' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flex: 1, overflow: 'hidden' }}>
+                        <div style={{ fontWeight: 500 }}>Maximum Container Tracking Amount</div>
+                    </div>
+                    <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                        <input 
+                            type="number" 
+                            className="form-input" 
+                            style={{ width: '80px', margin: 0 }} 
+                            value={maxContainerTracking}
+                            onChange={(e) => setMaxContainerTracking(e.target.value)}
+                        />
+                        <button onClick={handleSaveMaxTracking} className="btn-primary" style={{ flexShrink: 0 }}>
+                            Save Limit
+                        </button>
+                    </div>
+                </div>
+
+                <div className="attribute-item" style={{ display: 'flex', justifyContent: 'space-between', padding: '12px 16px', background: 'var(--surface-color)', borderRadius: '6px', border: '1px solid var(--border-color)', alignItems: 'center', marginTop: '12px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flex: 1, overflow: 'hidden' }}>
+                        <div style={{ fontWeight: 500 }}>findTEU API URL</div>
+                    </div>
+                    <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                        <input 
+                            type="text" 
+                            className="form-input" 
+                            style={{ width: '250px', margin: 0 }} 
+                            value={findTeuApi}
+                            onChange={(e) => setFindTeuApi(e.target.value)}
+                        />
+                    </div>
+                </div>
+
+                <div className="attribute-item" style={{ display: 'flex', justifyContent: 'space-between', padding: '12px 16px', background: 'var(--surface-color)', borderRadius: '6px', border: '1px solid var(--border-color)', alignItems: 'center', marginTop: '12px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flex: 1, overflow: 'hidden' }}>
+                        <div style={{ fontWeight: 500 }}>findTEU API Key</div>
+                    </div>
+                    <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                        <input 
+                            type="text" 
+                            className="form-input" 
+                            style={{ width: '250px', margin: 0 }} 
+                            value={findTeuApiKey}
+                            onChange={(e) => setFindTeuApiKey(e.target.value)}
+                        />
+                    </div>
+                </div>
+
+                <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '12px' }}>
+                    <button onClick={handleSaveFindTeuSettings} className="btn-primary">
+                        Save API Settings
                     </button>
                 </div>
             </div>

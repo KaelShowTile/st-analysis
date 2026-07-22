@@ -6,7 +6,7 @@ import './Containers.css'; // Reuse container CSS since the layout is similar
 export default function ShipperList({ currentUser }) {
     const [records, setRecords] = useState([]);
     const [loading, setLoading] = useState(false);
-    
+
     const canWrite = currentUser?.permissions?.containers?.write;
 
     const loadRecords = async () => {
@@ -30,7 +30,7 @@ export default function ShipperList({ currentUser }) {
         if (!canWrite) return;
         try {
             const db = await getDb();
-            await db.execute('INSERT INTO shippers (shipper_name, payment_term) VALUES ($1, $2)', ['', '']);
+            await db.execute('INSERT INTO shippers (shipper_name, payment_term, payment_period, deposit) VALUES ($1, $2, $3, $4)', ['', '', 0, 0]);
             loadRecords();
         } catch (e) {
             console.error('Failed to add shipper', e);
@@ -70,7 +70,7 @@ export default function ShipperList({ currentUser }) {
     };
 
     return (
-        <div className="containers-main" style={{ height: '100%', flex: 1, padding: '24px' }}>
+        <div className="containers-main" style={{ height: '100%', flex: 1 }}>
             <div className="main-header">
                 <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
                     <h2 style={{ margin: 0 }}>Shippers</h2>
@@ -82,7 +82,7 @@ export default function ShipperList({ currentUser }) {
                 </div>
             </div>
 
-            <div className="table-container">
+            <div className="table-container shipper-container">
                 {loading ? (
                     <div style={{ padding: '24px', textAlign: 'center', color: '#64748b' }}>Loading records...</div>
                 ) : (
@@ -93,13 +93,15 @@ export default function ShipperList({ currentUser }) {
                                     <th style={{ width: '60px', minWidth: '60px' }}>ID</th>
                                     <th style={{ width: '250px', minWidth: '250px' }}>Shipper Name</th>
                                     <th style={{ width: '200px', minWidth: '200px' }}>Payment Term</th>
+                                    <th style={{ width: '150px', minWidth: '150px' }}>Payment Period (Days)</th>
+                                    <th style={{ width: '120px', minWidth: '120px' }}>Deposit (%)</th>
                                     {canWrite && <th style={{ width: '40px', minWidth: '40px' }}></th>}
                                 </tr>
                             </thead>
                             <tbody>
                                 {records.length === 0 ? (
                                     <tr>
-                                        <td colSpan={canWrite ? 4 : 3} style={{ textAlign: 'center', padding: '32px', color: '#94a3b8' }}>
+                                        <td colSpan={canWrite ? 6 : 5} style={{ textAlign: 'center', padding: '32px', color: '#94a3b8' }}>
                                             No shippers found.
                                         </td>
                                     </tr>
@@ -134,6 +136,36 @@ export default function ShipperList({ currentUser }) {
                                                     onBlur={(e) => {
                                                         if (e.target.dataset.initial !== e.target.value) {
                                                             handleCellBlur(row, 'payment_term', e.target.value);
+                                                        }
+                                                    }}
+                                                    disabled={!canWrite}
+                                                />
+                                            </td>
+                                            <td style={{ width: '150px', minWidth: '150px' }}>
+                                                <input
+                                                    type="number"
+                                                    className="excel-input"
+                                                    value={row.payment_period ?? ''}
+                                                    onChange={(e) => handleCellChange(row.shipper_id, 'payment_period', e.target.value === '' ? null : Number(e.target.value))}
+                                                    onFocus={(e) => { e.target.dataset.initial = e.target.value; }}
+                                                    onBlur={(e) => {
+                                                        if (e.target.dataset.initial !== String(row.payment_period ?? '')) {
+                                                            handleCellBlur(row, 'payment_period', row.payment_period);
+                                                        }
+                                                    }}
+                                                    disabled={!canWrite}
+                                                />
+                                            </td>
+                                            <td style={{ width: '120px', minWidth: '120px' }}>
+                                                <input
+                                                    type="number"
+                                                    className="excel-input"
+                                                    value={row.deposit ?? ''}
+                                                    onChange={(e) => handleCellChange(row.shipper_id, 'deposit', e.target.value === '' ? null : Number(e.target.value))}
+                                                    onFocus={(e) => { e.target.dataset.initial = e.target.value; }}
+                                                    onBlur={(e) => {
+                                                        if (e.target.dataset.initial !== String(row.deposit ?? '')) {
+                                                            handleCellBlur(row, 'deposit', row.deposit);
                                                         }
                                                     }}
                                                     disabled={!canWrite}

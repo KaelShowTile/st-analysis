@@ -68,6 +68,13 @@
     transform: none;
 }
 
+.btn-upload.white-bg {
+    background: #fff;
+    color: #000000;
+    box-shadow: 0 4px 6px rgba(59, 130, 246, 0.15);
+    border: 1px solid #ddd;
+}
+
 .table-container {
     flex: 1;
     background-color: var(--surface-color);
@@ -125,9 +132,11 @@
     position: relative;
     transition: background-color 0.2s ease;
 }
+
 .editable-cell:hover {
     background-color: #f1f5f9;
 }
+
 .editable-cell .edit-icon {
     opacity: 0;
     margin-left: 8px;
@@ -135,6 +144,7 @@
     color: #94a3b8;
     transition: opacity 0.2s ease;
 }
+
 .editable-cell:hover .edit-icon {
     opacity: 1;
 }

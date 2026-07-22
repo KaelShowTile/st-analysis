@@ -2,10 +2,17 @@ import { useState } from 'react';
 import ContainerList from './ContainerList';
 import ShipperList from './ShipperList';
 import ContainerReport from './ContainerReport';
+import ShipmentOrders from './ShipmentOrders';
 import './Containers.css';
 
 export default function Containers({ currentUser }) {
-    const [subTab, setSubTab] = useState('list'); // 'list', 'report', 'shipper'
+    const [subTab, setSubTab] = useState('report'); // 'list', 'report', 'shipper'
+    const [editShipmentId, setEditShipmentId] = useState(null);
+
+    const handleNavigateToShipment = (id) => {
+        setEditShipmentId(id);
+        setSubTab('shipments');
+    };
 
     return (
         <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
@@ -18,16 +25,22 @@ export default function Containers({ currentUser }) {
                 zIndex: 10
             }}>
                 <button
+                    className={`subnav-btn ${subTab === 'report' ? 'active' : ''}`}
+                    onClick={() => setSubTab('report')}
+                >
+                    Dashboard
+                </button>
+                <button
+                    className={`subnav-btn ${subTab === 'shipments' ? 'active' : ''}`}
+                    onClick={() => setSubTab('shipments')}
+                >
+                    Shipment Orders
+                </button>
+                <button
                     className={`subnav-btn ${subTab === 'list' ? 'active' : ''}`}
                     onClick={() => setSubTab('list')}
                 >
                     Container List
-                </button>
-                <button
-                    className={`subnav-btn ${subTab === 'report' ? 'active' : ''}`}
-                    onClick={() => setSubTab('report')}
-                >
-                    Container Report
                 </button>
                 <button
                     className={`subnav-btn ${subTab === 'shipper' ? 'active' : ''}`}
@@ -38,8 +51,9 @@ export default function Containers({ currentUser }) {
             </div>
 
             <div style={{ flex: 1, overflow: 'hidden', display: 'flex' }}>
-                {subTab === 'list' && <ContainerList currentUser={currentUser} />}
-                {subTab === 'report' && <ContainerReport />}
+                {subTab === 'shipments' && <ShipmentOrders currentUser={currentUser} initialEditId={editShipmentId} onClearEdit={() => setEditShipmentId(null)} />}
+                {subTab === 'list' && <ContainerList currentUser={currentUser} onNavigateToShipment={handleNavigateToShipment} />}
+                {subTab === 'report' && <ContainerReport currentUser={currentUser} onNavigateToShipment={handleNavigateToShipment} />}
                 {subTab === 'shipper' && <ShipperList currentUser={currentUser} />}
             </div>
         </div>

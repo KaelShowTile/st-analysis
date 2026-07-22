@@ -64,27 +64,24 @@ export default function Dashboard({ currentUser, onNavigate }) {
                             const calc = getCellCalculations(cell, startDate, report.end_date, inventoryMap, salesData);
 
                             if (calc.isLowStock) {
-                                // Find product name from one of the SKUs if possible
-                                let productName = report.name;
-                                
-                                lowStock.push({
-                                    reportId: report.id,
-                                    reportName: report.name,
-                                    productName: productName,
-                                    finish: finish.name,
-                                    size: size.name,
-                                    colour: colour,
-                                    total: calc.total,
-                                    cycle: calc.cycle
-                                });
+                                let existing = lowStock.find(r => r.reportId === report.id);
+                                if (!existing) {
+                                    lowStock.push({
+                                        reportId: report.id,
+                                        reportName: report.name,
+                                        count: 1
+                                    });
+                                } else {
+                                    existing.count += 1;
+                                }
                             }
                         });
                     });
                 });
             });
 
-            // Sort low stock items by cycle (highest cycle first, or lowest total)
-            lowStock.sort((a, b) => a.total - b.total);
+            // Sort low stock reports by count descending
+            lowStock.sort((a, b) => b.count - a.count);
             setLowStockItems(lowStock);
 
         } catch (err) {
@@ -123,11 +120,7 @@ export default function Dashboard({ currentUser, onNavigate }) {
                                 <thead>
                                     <tr>
                                         <th>Report</th>
-                                        <th>Finish</th>
-                                        <th>Size</th>
-                                        <th>Colour</th>
-                                        <th className="num">Total Qty</th>
-                                        <th className="num">Cycle</th>
+                                        <th className="num">Low Stock Components</th>
                                         <th>Action</th>
                                     </tr>
                                 </thead>
@@ -135,11 +128,7 @@ export default function Dashboard({ currentUser, onNavigate }) {
                                     {lowStockItems.map((item, idx) => (
                                         <tr key={idx}>
                                             <td style={{ fontWeight: 600 }}>{item.reportName}</td>
-                                            <td><span className="param-badge finish">{item.finish}</span></td>
-                                            <td><span className="param-badge size">{item.size}</span></td>
-                                            <td>{item.colour}</td>
-                                            <td className="num" style={{ color: '#ef4444', fontWeight: 'bold' }}>{item.total.toFixed(0)}</td>
-                                            <td className="num">{item.cycle.toFixed(2)}</td>
+                                            <td className="num" style={{ color: '#ef4444', fontWeight: 'bold' }}>{item.count} items</td>
                                             <td>
                                                 <button 
                                                     className="btn-view"

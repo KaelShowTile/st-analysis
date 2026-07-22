@@ -24,6 +24,16 @@
     justify-content: center;
 }
 
+.container-status-list {
+    width: 100%;
+    padding: 0 12px 0;
+    margin-bottom: 20px;
+}
+
+.container-status-list thead {
+    background: #f6f6f6;
+}
+
 .reports-list {
     flex: 1;
     overflow-y: auto;

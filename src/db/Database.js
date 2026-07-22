@@ -11,6 +11,26 @@ export const getDbPath = async () => {
     return customPath || null;
 };
 
+export const getSetting = async (key, defaultValue) => {
+    try {
+        const db = await getDb();
+        const res = await db.select("SELECT value FROM settings WHERE key = $1", [key]);
+        if (res.length > 0) return res[0].value;
+        return defaultValue;
+    } catch (e) {
+        return defaultValue;
+    }
+};
+
+export const setSetting = async (key, value) => {
+    try {
+        const db = await getDb();
+        await db.execute("INSERT OR REPLACE INTO settings (key, value) VALUES ($1, $2)", [key, value]);
+    } catch (e) {
+        console.error("Failed to set setting:", e);
+    }
+};
+
 export const getDb = async () => {
     if (!dbPromise) {
         dbPromise = (async () => {
@@ -124,7 +144,21 @@ const initializeTables = async (db) => {
         CREATE TABLE IF NOT EXISTS shippers (
             shipper_id INTEGER PRIMARY KEY AUTOINCREMENT,
             shipper_name TEXT,
-            payment_term TEXT
+            payment_term TEXT,
+            payment_period INTEGER
+        )
+    `);
+
+    await db.execute(`
+        CREATE TABLE IF NOT EXISTS shipments (
+            shipment_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            invoice_no TEXT,
+            shipper TEXT,
+            products TEXT,
+            est_date TEXT,
+            hbl_no TEXT,
+            note TEXT,
+            status TEXT DEFAULT 'open'
         )
     `);
 
@@ -166,15 +200,44 @@ const initializeTables = async (db) => {
     } catch (e) {}
 
     try {
+        await db.execute('ALTER TABLE shippers ADD COLUMN payment_period INTEGER');
+    } catch (e) {}
+
+    try {
         await db.execute('ALTER TABLE reports ADD COLUMN start_date TEXT');
     } catch (e) {}
 
     // Container migrations
-    const containerCols = ['original_eta', 'product_sku', 'origin', 'destination', 'warehouse_received', 'track_status', 'shippment'];
+    const containerCols = ['original_eta', 'product_sku', 'origin', 'destination', 'warehouse_received', 'track_status', 'shippment', 'subscription_id'];
     for (const col of containerCols) {
         try {
             await db.execute(`ALTER TABLE containers ADD COLUMN ${col} TEXT`);
         } catch (e) {}
+    }
+
+    // Shipper and Shipment new columns
+    try {
+        await db.execute('ALTER TABLE shippers ADD COLUMN deposit INTEGER DEFAULT 0');
+    } catch (e) {}
+
+    const shipmentCols = ['deposit', 'balance'];
+    for (const col of shipmentCols) {
+        try {
+            await db.execute(`ALTER TABLE shipments ADD COLUMN ${col} INTEGER`);
+        } catch (e) {}
+    }
+    try {
+        await db.execute('ALTER TABLE shipments ADD COLUMN payment_date TEXT');
+    } catch (e) {}
+
+    // Drop unused columns from containers
+    const dropCols = ['payment', 'seq', 'shipper', 'invoice_no', 'hbl_no'];
+    for (const col of dropCols) {
+        try {
+            await db.execute(`ALTER TABLE containers DROP COLUMN ${col}`);
+        } catch (e) {
+            console.warn(`Could not drop column ${col} from containers. Older SQLite version?`, e);
+        }
     }
 
     // Auth System
