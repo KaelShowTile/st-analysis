@@ -36,6 +36,8 @@
     border-radius: 12px;
     box-shadow: var(--shadow-sm);
     overflow: hidden;
+    max-width: 800px;
+    margin: 0 auto;
 }
 
 .alert-card-header {

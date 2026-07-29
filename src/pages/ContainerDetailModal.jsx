@@ -131,7 +131,8 @@ export default function ContainerDetailModal({ record, onClose, inventoryMap, sh
                             <div style={{ display: 'grid', gap: '16px' }}>
                                 {parsedContents.map((block, idx) => {
                                     const shp = shipmentsMap ? shipmentsMap[block.shipment_id] : null;
-                                    const shipperName = shp ? (shippersMap[shp.shipper]?.shipper_name || shp.shipper) : 'Unknown';
+                                    const shipperObj = shp ? shippersMap[shp.shipper] : null;
+                                    const shipperName = shp ? (shipperObj?.name || shipperObj?.shipper_name || shp.shipper) : 'Unknown';
                                     const invoiceNo = shp?.invoice_no || '-';
 
                                     return (

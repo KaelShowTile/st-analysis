@@ -217,48 +217,83 @@ export default function ContainerReport({ currentUser, onNavigateToShipment }) {
             }
         });
 
-        // 4. Unpaid Shipment Orders
-        shipmentsData.forEach(s => {
-            if (s.deposit == null || s.balance == null) {
-                let status = 'Unpaid';
-                let isOverdue = false;
-                if (s.est_date) {
-                    const estDateObj = new Date(s.est_date);
-                    estDateObj.setUTCDate(estDateObj.getUTCDate() + 10);
-                    const overdueDateStr = estDateObj.toISOString().split('T')[0];
-                    if (overdueDateStr < todayStr) {
-                        status = 'Overdue';
-                        isOverdue = true;
+        // 4. Unpaid Containers
+        containers.forEach(c => {
+            let cDep = {};
+            let cBal = {};
+            try { if (c.deposit) cDep = JSON.parse(c.deposit); } catch (e) { }
+            try { if (c.balance) cBal = JSON.parse(c.balance); } catch (e) { }
+            let parsedContents = [];
+            try { if (c.contents) parsedContents = JSON.parse(c.contents); } catch (e) { }
+
+            let hasUnpaidShipments = false;
+            let isOverdue = false;
+            const cShippers = new Set();
+
+            parsedContents.forEach(block => {
+                if (block.shipment_id && soMap[block.shipment_id]) {
+                    const sId = block.shipment_id;
+                    const shipment = soMap[sId];
+                    if (shipment.shipper) {
+                        String(shipment.shipper).split(',').forEach(s => cShippers.add(s.trim()));
+                    }
+
+                    const shipper = sMap[shipment.shipper];
+                    const dRate = shipper ? (shipper.deposit || 0) : 0;
+                    const bRate = 100 - dRate;
+                    const paymentPeriod = shipper ? (shipper.payment_period || 0) : 0;
+
+                    let isShipmentUnpaid = false;
+                    if (dRate > 0 && cDep[sId] == null) {
+                        isShipmentUnpaid = true;
+                    }
+                    if (bRate > 0 && cBal[sId] == null) {
+                        isShipmentUnpaid = true;
+                    }
+
+                    if (isShipmentUnpaid) {
+                        hasUnpaidShipments = true;
+                        if (c.etd) {
+                            const etdDateObj = new Date(c.etd);
+                            if (!isNaN(etdDateObj)) {
+                                etdDateObj.setUTCDate(etdDateObj.getUTCDate() + Number(paymentPeriod));
+                                const overdueDateStr = etdDateObj.toISOString().split('T')[0];
+                                if (todayStr > overdueDateStr) {
+                                    isOverdue = true;
+                                }
+                            }
+                        }
                     }
                 }
+            });
 
-                const sName = sMap[s.shipper]?.shipper_name || sMap[s.shipper]?.name || s.shipper;
+            if (hasUnpaidShipments && parsedContents.length > 0 && c.etd && todayStr > c.etd) {
+                let status = isOverdue ? 'Overdue' : 'Unpaid';
+
+                const shipperNames = Array.from(cShippers).map(sId => sMap[sId]?.name || sMap[sId]?.shipper_name || sId).join(', ');
 
                 unpaid.push({
-                    shipment_id: s.shipment_id,
-                    name: `Inv: ${s.invoice_no || 'N/A'} (ID: ${s.shipment_id})`,
-                    shipper_name: sName,
-                    dateVal: s.est_date || 'N/A',
+                    ...c, // keep container details for handleRowClick
+                    name: ` ${c.cntr_no || 'N/A'}`,
+                    shipper_name: shipperNames,
+                    dateVal: c.etd,
                     isOverdue,
                     status
                 });
             }
         });
 
-        // Dedup unpaid because a container might have multiple unpaid shippers (Not applicable for shipments anymore, but keep structure clean)
-        const uniqueUnpaid = unpaid; // Shipments are already unique per iteration
-
         // Sort lists (newest first based on ID for simplicity, or delivery/eta if wanted. ID is fine)
         arrivedThisMonth.sort((a, b) => b.container_id - a.container_id);
         delayed.sort((a, b) => b.container_id - a.container_id);
         inTransit.sort((a, b) => b.container_id - a.container_id);
-        // uniqueUnpaid doesn't have container_id, don't sort it by container_id
+        unpaid.sort((a, b) => b.container_id - a.container_id);
 
         setLists({
             arrivedThisMonth,
             delayed,
             inTransit,
-            unpaid: uniqueUnpaid,
+            unpaid,
             debugLogs
         });
     };
@@ -359,7 +394,7 @@ export default function ContainerReport({ currentUser, onNavigateToShipment }) {
                         </>
                     ))}
 
-                    {renderList('Unpaid Shipment Orders', ['Order Info', 'Est. Date', 'Status'], lists.unpaid, (item) => (
+                    {renderList('Unpaid Containers', ['Container', 'ETD', 'Status'], lists.unpaid, (item) => (
                         <>
                             <td style={{ width: '40%', padding: '8px' }}>
                                 <div style={{ fontSize: '0.85rem', fontWeight: 500, cursor: 'pointer' }}>{item.name}</div>

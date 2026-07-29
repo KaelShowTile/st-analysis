@@ -125,7 +125,8 @@
 }
 
 .excel-table-wrapper.create-order-wrapper .excel-table {
-    width: 100%;
+    min-width: 100%;
+    width: max-content;
 }
 
 .excel-table {
@@ -150,6 +151,8 @@
     position: sticky;
     top: 0;
     z-index: 10;
+    resize: horizontal;
+    overflow: auto;
 }
 
 .excel-table td {
@@ -199,6 +202,15 @@
 
 .excel-input[type="date"] {
     font-family: monospace;
+}
+
+.has-sort-icon svg {
+    background: #3b82f6;
+    border-radius: 3px;
+    margin: 0 2px -1px 0 !important;
+    color: #fff !important;
+    vertical-align: baseline !important;
+    opacity: 0.8;
 }
 
 /* Sub-Navigation Styles */

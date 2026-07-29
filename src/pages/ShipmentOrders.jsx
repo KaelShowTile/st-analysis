@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react';
 import { getDb } from '../db/Database';
-import { Plus, Edit, Trash2, Search, Check } from 'lucide-react';
-import { confirm } from '@tauri-apps/plugin-dialog';
+import { Plus, Edit, Trash2, Search, Check, ChevronUp, ChevronDown, ListFilter, XCircle, Printer, Download } from 'lucide-react';
+import { confirm, save } from '@tauri-apps/plugin-dialog';
+import { writeTextFile } from '@tauri-apps/plugin-fs';
 import './Containers.css';
 
 export default function ShipmentOrders({ currentUser, initialEditId, onClearEdit }) {
@@ -33,6 +34,12 @@ export default function ShipmentOrders({ currentUser, initialEditId, onClearEdit
 
     const [productSearch, setProductSearch] = useState('');
 
+    const defaultCols = ['status', 'shipper', 'invoice_no', 'payment', 'products', 'est_date', 'note'];
+    const [visibleColumns, setVisibleColumns] = useState(defaultCols);
+    const [showColumnModal, setShowColumnModal] = useState(false);
+    const [sortConfig, setSortConfig] = useState({ key: '', direction: '' });
+    const [filterStatus, setFilterStatus] = useState('');
+
     const canWrite = currentUser?.permissions?.containers?.write !== false;
 
     useEffect(() => {
@@ -41,11 +48,11 @@ export default function ShipmentOrders({ currentUser, initialEditId, onClearEdit
 
     useEffect(() => {
         applyFilters();
-    }, [orders, filterShipper, filterEstDateFrom, filterEstDateTo, searchProducts]);
+    }, [orders, filterShipper, filterEstDateFrom, filterEstDateTo, searchProducts, filterStatus]);
 
     useEffect(() => {
         if (initialEditId && orders.length > 0) {
-            const target = orders.find(o => o.shipment_id === initialEditId);
+            const target = orders.find(o => o.shipment_id == initialEditId);
             if (target) {
                 handleEditClick(target);
                 if (onClearEdit) onClearEdit();
@@ -58,6 +65,10 @@ export default function ShipmentOrders({ currentUser, initialEditId, onClearEdit
             const db = await getDb();
             const sRes = await db.select('SELECT * FROM shippers ORDER BY shipper_name ASC');
             setShippers(sRes);
+            const colSetting = await db.select("SELECT value FROM settings WHERE key = 'shipment_orders_columns'");
+            if (colSetting && colSetting.length > 0) {
+                try { setVisibleColumns(JSON.parse(colSetting[0].value)); } catch (e) { }
+            }
 
             const iRes = await db.select('SELECT * FROM inventory WHERE backorder = 1 ORDER BY sales_description ASC');
             setInventory(iRes);
@@ -81,6 +92,9 @@ export default function ShipmentOrders({ currentUser, initialEditId, onClearEdit
     const applyFilters = () => {
         let result = [...orders];
 
+        if (filterStatus) {
+            result = result.filter(o => o.status === filterStatus);
+        }
         if (filterShipper) {
             result = result.filter(o => o.shipper == filterShipper);
         }
@@ -152,13 +166,13 @@ export default function ShipmentOrders({ currentUser, initialEditId, onClearEdit
             const selectedShipper = shippers.find(s => s.shipper_id == formData.shipper);
             const depositRate = selectedShipper ? (selectedShipper.deposit || 0) : 0;
             const balanceRate = 100 - depositRate;
-            
+
             const dbDeposit = formData.depositPaid ? depositRate : null;
             let dbBalance = formData.balancePaid ? balanceRate : null;
             if (depositRate === 100 && formData.depositPaid) {
                 dbBalance = 0;
             }
-            
+
             const dbPaymentDate = (formData.depositPaid && (formData.balancePaid || depositRate === 100)) ? formData.payment_date : null;
 
             if (formMode === 'add') {
@@ -171,6 +185,28 @@ export default function ShipmentOrders({ currentUser, initialEditId, onClearEdit
                     'UPDATE shipments SET invoice_no = $1, shipper = $2, products = $3, est_date = $4, note = $5, status = $6, deposit = $7, balance = $8, payment_date = $9 WHERE shipment_id = $10',
                     [formData.invoice_no, formData.shipper, prodStr, formData.est_date, formData.note, formData.status, dbDeposit, dbBalance, dbPaymentDate, editingId]
                 );
+
+                // Sync payments down to all linked containers
+                const containers = await db.select('SELECT container_id, contents, deposit, balance, payment_date FROM containers');
+                for (const cntr of containers) {
+                    try {
+                        const parsedContents = JSON.parse(cntr.contents || '[]');
+                        if (parsedContents.some(item => item.shipment_id == editingId)) {
+                            let cDep = cntr.deposit ? JSON.parse(cntr.deposit) : {};
+                            let cBal = cntr.balance ? JSON.parse(cntr.balance) : {};
+                            let cPay = cntr.payment_date ? JSON.parse(cntr.payment_date) : {};
+
+                            if (dbDeposit != null) cDep[editingId] = dbDeposit; else delete cDep[editingId];
+                            if (dbBalance != null) cBal[editingId] = dbBalance; else delete cBal[editingId];
+                            if (dbPaymentDate != null) cPay[editingId] = dbPaymentDate; else delete cPay[editingId];
+
+                            await db.execute(
+                                'UPDATE containers SET deposit = $1, balance = $2, payment_date = $3 WHERE container_id = $4',
+                                [JSON.stringify(cDep), JSON.stringify(cBal), JSON.stringify(cPay), cntr.container_id]
+                            );
+                        }
+                    } catch (err) { }
+                }
             }
 
             resetForm();
@@ -244,7 +280,147 @@ export default function ShipmentOrders({ currentUser, initialEditId, onClearEdit
     const filteredInventory = inventory.filter(i => {
         const search = productSearch.toLowerCase();
         return (i.sales_description || '').toLowerCase().includes(search) || (i.sku || '').toLowerCase().includes(search);
+    }).sort((a, b) => {
+        const aSelected = formData.products.includes(a.product_id.toString());
+        const bSelected = formData.products.includes(b.product_id.toString());
+        if (aSelected && !bSelected) return -1;
+        if (!aSelected && bSelected) return 1;
+        return 0;
     });
+
+    const toggleColumn = async (col) => {
+        const newCols = visibleColumns.includes(col) ? visibleColumns.filter(c => c !== col) : [...visibleColumns, col];
+        setVisibleColumns(newCols);
+        try {
+            const db = await getDb();
+            await db.execute("INSERT INTO settings (key, value) VALUES ('shipment_orders_columns', $1) ON CONFLICT(key) DO UPDATE SET value = $1", [JSON.stringify(newCols)]);
+        } catch (e) { }
+    };
+
+    const handleSort = (key) => {
+        let direction = 'asc';
+        if (sortConfig.key === key && sortConfig.direction === 'asc') direction = 'desc';
+        setSortConfig({ key, direction });
+    };
+
+    const SortIcon = ({ columnKey }) => {
+        if (sortConfig.key !== columnKey) return <ChevronDown size={14} style={{ color: '#cbd5e1', marginLeft: '4px', verticalAlign: 'middle' }} />;
+        return sortConfig.direction === 'asc' ? <ChevronUp size={14} style={{ color: '#3b82f6', marginLeft: '4px', verticalAlign: 'middle' }} /> : <ChevronDown size={14} style={{ color: '#3b82f6', marginLeft: '4px', verticalAlign: 'middle' }} />;
+    };
+
+    const sortedOrders = [...filteredOrders].sort((a, b) => {
+        if (!sortConfig.key) return 0;
+        const key = sortConfig.key;
+        let valA = a[key] || '';
+        let valB = b[key] || '';
+        if (key === 'shipper') {
+            valA = getShipperName(a.shipper) || '';
+            valB = getShipperName(b.shipper) || '';
+        }
+        if (valA < valB) return sortConfig.direction === 'asc' ? -1 : 1;
+        if (valA > valB) return sortConfig.direction === 'asc' ? 1 : -1;
+        return 0;
+    });
+
+    const exportHTML = async (print = false) => {
+        let htmlRows = '';
+        sortedOrders.forEach(order => {
+            const s = shippers.find(x => x.shipper_id == order.shipper);
+            const dRate = s ? (s.deposit || 0) : 0;
+            const bRate = 100 - dRate;
+
+            let paymentStr = `Deposit (${dRate}%): ${order.deposit != null ? 'Paid' : 'Pending'}`;
+            if (dRate < 100) {
+                paymentStr += `<br/>Balance (${bRate}%): ${order.balance != null ? 'Paid' : 'Pending'}`;
+            }
+            if (order.payment_date) {
+                paymentStr += `<br/>Date: ${order.payment_date}`;
+            }
+
+            const productsStr = getProductNames(order.products).join('<br/>');
+
+            htmlRows += `<tr>
+                <td>${(order.status || 'open').toUpperCase()}</td>
+                <td>${getShipperName(order.shipper)}</td>
+                <td>${order.invoice_no || ''}</td>
+                <td>${paymentStr}</td>
+                <td>${productsStr}</td>
+                <td>${order.est_date || ''}</td>
+                <td>${order.note || ''}</td>
+            </tr>`;
+        });
+
+        const html = `<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Shipment Orders</title>
+<style>
+    body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; padding: 20px; color: #1e293b; background: white; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    h2 { margin-top: 0; color: #0f172a; margin-bottom: 20px; }
+    .report-table { width: 100%; border-collapse: collapse; font-size: 11px; }
+    .report-table th, .report-table td { border: 1px solid #cbd5e1; padding: 8px; text-align: left; vertical-align: top; }
+    .report-table th { background: #f8fafc; font-weight: bold; color: #475569; }
+    @media print {
+        body { padding: 0; margin: 0; }
+        @page { size: landscape; margin: 10mm; }
+    }
+</style>
+</head>
+<body>
+    <h2>Shipment Orders (Records: ${sortedOrders.length})</h2>
+    <table class="report-table">
+        <thead>
+            <tr>
+                <th>Status</th>
+                <th>Shipper</th>
+                <th>Invoice No.</th>
+                <th>Payment</th>
+                <th>Products</th>
+                <th>Est. Date</th>
+                <th>Note</th>
+            </tr>
+        </thead>
+        <tbody>
+            ${htmlRows}
+        </tbody>
+    </table>
+</body>
+</html>`;
+
+        if (print) {
+            const iframe = document.createElement('iframe');
+            iframe.style.display = 'none';
+            document.body.appendChild(iframe);
+
+            iframe.contentWindow.document.open();
+            iframe.contentWindow.document.write(html);
+            iframe.contentWindow.document.close();
+
+            iframe.contentWindow.focus();
+            setTimeout(() => {
+                iframe.contentWindow.print();
+                setTimeout(() => {
+                    if (document.body.contains(iframe)) {
+                        document.body.removeChild(iframe);
+                    }
+                }, 1000);
+            }, 500);
+        } else {
+            try {
+                const filePath = await save({
+                    filters: [{ name: 'HTML Document', extensions: ['html'] }],
+                    defaultPath: `shipment_orders.html`,
+                });
+
+                if (filePath) {
+                    await writeTextFile(filePath, html);
+                }
+            } catch (e) {
+                console.error('Failed to export HTML', e);
+            }
+        }
+    };
 
     return (
         <div style={{ display: 'flex', width: '100%', height: '100%', backgroundColor: '#f8fafc' }}>
@@ -252,53 +428,78 @@ export default function ShipmentOrders({ currentUser, initialEditId, onClearEdit
             {/* Left Pane - Table */}
             <div style={{ flex: 1, display: 'flex', flexDirection: 'column', borderRight: '1px solid #e2e8f0', overflow: 'hidden' }}>
                 <div style={{ padding: '16px 24px', backgroundColor: 'white' }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
-                        <h2 style={{ margin: 0, fontSize: '1.25rem', color: '#1e293b' }}>Shipment Orders</h2>
-                        {canWrite && (
-                            <button className="btn-primary" onClick={resetForm} style={{ padding: '6px 16px', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                                <Plus size={16} /> Add Order
+                    <div style={{ display: 'flex', alignItems: 'center', marginBottom: '16px', justifyContent: 'space-between' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                            <h2 style={{ margin: 0, fontSize: '1.25rem', color: '#1e293b' }}>Shipment Orders</h2>
+                            {canWrite && (
+                                <button className="btn-primary" onClick={resetForm} style={{ display: 'flex', alignItems: 'center', gap: '2px', marginLeft: '12px' }}>
+                                    <Plus size={16} /> Add Order
+                                </button>
+                            )}
+                        </div>
+                        <div className="header-actions">
+                            <button className="btn-upload white-bg" onClick={() => setShowColumnModal(true)} title="Columns">
+                                <ListFilter size={16} style={{ marginRight: '2px' }} /> Columns
                             </button>
-                        )}
+                            <button className="btn-upload white-bg" onClick={() => exportHTML(true)}>
+                                <Printer size={16} style={{ marginRight: '2px' }} /> Print List
+                            </button>
+                            <button className="btn-upload white-bg" onClick={() => exportHTML(false)}>
+                                <Download size={16} style={{ marginRight: '2px' }} /> Export HTML
+                            </button>
+                        </div>
                     </div>
 
-                    <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap' }}>
-                        <div style={{ flex: 1, minWidth: '200px', position: 'relative' }}>
-                            <Search size={16} style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', color: '#94a3b8' }} />
-                            <input
-                                type="text"
-                                placeholder="Search products..."
-                                value={searchProducts}
-                                onChange={(e) => setSearchProducts(e.target.value)}
-                                style={{ width: '100%', padding: '6px 12px 6px 32px', border: '1px solid #cbd5e1', borderRadius: '4px', outline: 'none' }}
-                            />
-                        </div>
-                        <select
-                            value={filterShipper}
-                            onChange={(e) => setFilterShipper(e.target.value)}
-                            style={{ padding: '6px 12px', border: '1px solid #cbd5e1', borderRadius: '4px', outline: 'none', background: 'white', minWidth: '150px' }}
-                        >
-                            <option value="">All Shippers</option>
-                            {shippers.map(s => (
-                                <option key={s.shipper_id} value={s.shipper_id}>{s.shipper_name}</option>
-                            ))}
-                        </select>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                            <span style={{ fontSize: '0.85rem', color: '#64748b' }}>Date:</span>
-                            <input
-                                type="date"
-                                value={filterEstDateFrom}
-                                onChange={(e) => setFilterEstDateFrom(e.target.value)}
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '16px', marginBottom: '16px' }}>
+                        <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap', flex: 1 }}>
+                            <div style={{ flex: 1, minWidth: '200px', position: 'relative' }}>
+                                <Search size={16} style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', color: '#94a3b8' }} />
+                                <input
+                                    type="text"
+                                    placeholder="Search products..."
+                                    value={searchProducts}
+                                    onChange={(e) => setSearchProducts(e.target.value)}
+                                    style={{ width: '100%', padding: '6px 12px 6px 32px', border: '1px solid #cbd5e1', borderRadius: '4px', outline: 'none' }}
+                                />
+                            </div>
+                            <select
+                                value={filterStatus}
+                                onChange={e => setFilterStatus(e.target.value)}
                                 style={{ padding: '6px 12px', border: '1px solid #cbd5e1', borderRadius: '4px', outline: 'none' }}
-                                title="From Date"
-                            />
-                            <span style={{ fontSize: '0.85rem', color: '#64748b' }}>~</span>
-                            <input
-                                type="date"
-                                value={filterEstDateTo}
-                                onChange={(e) => setFilterEstDateTo(e.target.value)}
-                                style={{ padding: '6px 12px', border: '1px solid #cbd5e1', borderRadius: '4px', outline: 'none' }}
-                                title="To Date"
-                            />
+                            >
+                                <option value="">All Status</option>
+                                <option value="open">Open</option>
+                                <option value="processing">Processing</option>
+                                <option value="closed">Closed</option>
+                            </select>
+                            <select
+                                value={filterShipper}
+                                onChange={(e) => setFilterShipper(e.target.value)}
+                                style={{ padding: '6px 12px', border: '1px solid #cbd5e1', borderRadius: '4px', outline: 'none', background: 'white', minWidth: '150px' }}
+                            >
+                                <option value="">All Shippers</option>
+                                {shippers.map(s => (
+                                    <option key={s.shipper_id} value={s.shipper_id}>{s.shipper_name}</option>
+                                ))}
+                            </select>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                <span style={{ fontSize: '0.85rem', color: '#64748b' }}>Date:</span>
+                                <input
+                                    type="date"
+                                    value={filterEstDateFrom}
+                                    onChange={(e) => setFilterEstDateFrom(e.target.value)}
+                                    style={{ padding: '6px 12px', border: '1px solid #cbd5e1', borderRadius: '4px', outline: 'none' }}
+                                    title="From Date"
+                                />
+                                <span style={{ fontSize: '0.85rem', color: '#64748b' }}>~</span>
+                                <input
+                                    type="date"
+                                    value={filterEstDateTo}
+                                    onChange={(e) => setFilterEstDateTo(e.target.value)}
+                                    style={{ padding: '6px 12px', border: '1px solid #cbd5e1', borderRadius: '4px', outline: 'none' }}
+                                    title="To Date"
+                                />
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -312,16 +513,17 @@ export default function ShipmentOrders({ currentUser, initialEditId, onClearEdit
                                 <thead>
                                     <tr>
                                         {canWrite && <th style={{ width: '80px', minWidth: '80px', textAlign: 'center' }}>Actions</th>}
-                                        <th style={{ width: '100px', minWidth: '100px' }}>Status</th>
-                                        <th style={{ width: '150px', minWidth: '150px' }}>Shipper</th>
-                                        <th style={{ width: '120px', minWidth: '120px' }}>Invoice No.</th>
-                                        <th style={{ width: '120px', minWidth: '120px' }}>Est. Date</th>
-                                        <th style={{ width: '300px', minWidth: '300px' }}>Products</th>
-                                        <th style={{ width: '200px', minWidth: '200px' }}>Note</th>
+                                        {visibleColumns.includes('status') && <th className='has-sort-icon' style={{ width: '100px', minWidth: '100px', cursor: 'pointer' }} onClick={() => handleSort('status')}><SortIcon columnKey="status" /> Status</th>}
+                                        {visibleColumns.includes('shipper') && <th className='has-sort-icon' style={{ width: '150px', minWidth: '150px', cursor: 'pointer' }} onClick={() => handleSort('shipper')}><SortIcon columnKey="shipper" /> Shipper</th>}
+                                        {visibleColumns.includes('invoice_no') && <th className='has-sort-icon' style={{ width: '120px', minWidth: '120px', cursor: 'pointer' }} onClick={() => handleSort('invoice_no')}><SortIcon columnKey="invoice_no" /> Invoice No.</th>}
+                                        {visibleColumns.includes('payment') && <th style={{ width: '230px', minWidth: '230px' }}>Payment</th>}
+                                        {visibleColumns.includes('products') && <th style={{ width: '300px', minWidth: '300px' }}>Products</th>}
+                                        {visibleColumns.includes('est_date') && <th className='has-sort-icon' style={{ width: '120px', minWidth: '120px', cursor: 'pointer' }} onClick={() => handleSort('est_date')}><SortIcon columnKey="est_date" /> Est. Date</th>}
+                                        {visibleColumns.includes('note') && <th style={{ width: '200px', minWidth: '200px' }}>Note</th>}
                                     </tr>
                                 </thead>
                                 <tbody>
-                                    {filteredOrders.map(order => (
+                                    {sortedOrders.map(order => (
                                         <tr key={order.shipment_id}>
                                             {canWrite && (
                                                 <td style={{ textAlign: 'center' }}>
@@ -335,30 +537,69 @@ export default function ShipmentOrders({ currentUser, initialEditId, onClearEdit
                                                     </div>
                                                 </td>
                                             )}
-                                            <td>
+                                            {visibleColumns.includes('status') && <td>
                                                 <div className="readonly-cell" style={{ textAlign: 'center' }}>
                                                     <span style={{
-                                                        fontSize: '0.75rem',
-                                                        fontWeight: 600,
-                                                        textTransform: 'uppercase',
-                                                        padding: '2px 8px',
-                                                        borderRadius: '999px',
-                                                        backgroundColor: getStatusColor(order.status) + '20',
-                                                        color: getStatusColor(order.status)
+                                                        padding: '4px 8px',
+                                                        borderRadius: '4px',
+                                                        backgroundColor: `${getStatusColor(order.status)}20`,
+                                                        color: getStatusColor(order.status),
+                                                        fontSize: '0.8rem',
+                                                        fontWeight: 'bold',
+                                                        textTransform: 'uppercase'
                                                     }}>
-                                                        {order.status}
+                                                        {order.status || 'open'}
                                                     </span>
                                                 </div>
-                                            </td>
-                                            <td><div className="readonly-cell">{getShipperName(order.shipper)}</div></td>
-                                            <td><div className="readonly-cell">{order.invoice_no}</div></td>
-                                            <td><div className="readonly-cell">{order.est_date}</div></td>
-                                            <td>
-                                                <div className="readonly-cell" style={{ whiteSpace: 'normal', wordBreak: 'break-word', fontSize: '0.85rem', display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                                                    {getProductNames(order.products).map((name, i) => <div key={i}>{name}</div>)}
+                                            </td>}
+                                            {visibleColumns.includes('shipper') && <td><div className="readonly-cell">{getShipperName(order.shipper)}</div></td>}
+                                            {visibleColumns.includes('invoice_no') && <td><div className="readonly-cell">{order.invoice_no}</div></td>}
+                                            {visibleColumns.includes('payment') && <td>
+                                                {(() => {
+                                                    const s = shippers.find(x => x.shipper_id == order.shipper);
+                                                    const dRate = s ? (s.deposit || 0) : 0;
+                                                    const bRate = 100 - dRate;
+                                                    return (
+                                                        <div className="readonly-cell" style={{ fontSize: '0.8rem', color: '#475569' }}>
+                                                            <label style={{ display: 'flex', gap: '6px', alignItems: 'center', cursor: 'default' }}>
+                                                                <input type="checkbox" checked={order.deposit != null} readOnly style={{ cursor: 'default' }} />
+                                                                <span>{dRate}%</span>
+                                                            </label>
+                                                            {dRate < 100 && (
+                                                                <label style={{ display: 'flex', gap: '6px', alignItems: 'center', marginLeft: '4px', cursor: 'default' }}>
+                                                                    <input type="checkbox" checked={order.balance != null} readOnly style={{ cursor: 'default' }} />
+                                                                    <span>{bRate}%</span>
+                                                                </label>
+                                                            )}
+                                                            {order.payment_date && (
+                                                                <div style={{ marginLeft: '8px', color: '#ffffff', backgroundColor: 'rgb(16 185 129)', padding: '1px 4px 2px', MarginTop: '-1px' }}>Date: {order.payment_date}</div>
+                                                            )}
+                                                        </div>
+                                                    );
+                                                })()}
+                                            </td>}
+                                            {visibleColumns.includes('products') && <td>
+                                                <div className="readonly-cell" style={{ display: 'flex', flexDirection: 'column', gap: '4px', fontSize: '0.85rem' }}>
+                                                    {getProductNames(order.products).map((pname, idx) => (
+                                                        <div key={idx} style={{
+                                                            backgroundColor: '#f1f5f9',
+                                                            padding: '2px 6px',
+                                                            borderRadius: '4px',
+                                                            whiteSpace: 'nowrap',
+                                                            overflow: 'hidden',
+                                                            textOverflow: 'ellipsis'
+                                                        }}>
+                                                            {pname}
+                                                        </div>
+                                                    ))}
                                                 </div>
-                                            </td>
-                                            <td><div className="readonly-cell" style={{ whiteSpace: 'normal', wordBreak: 'break-word', fontSize: '0.85rem' }}>{order.note}</div></td>
+                                            </td>}
+                                            {visibleColumns.includes('est_date') && <td><div className="readonly-cell">{order.est_date}</div></td>}
+                                            {visibleColumns.includes('note') && <td>
+                                                <div className="readonly-cell" style={{ whiteSpace: 'pre-wrap', fontSize: '0.85rem', color: '#475569' }}>
+                                                    {order.note}
+                                                </div>
+                                            </td>}
                                         </tr>
                                     ))}
                                 </tbody>
@@ -481,8 +722,8 @@ export default function ShipmentOrders({ currentUser, initialEditId, onClearEdit
                                 ) : (
                                     <div style={{ display: 'flex', gap: '16px', alignItems: 'center', flexWrap: 'wrap' }}>
                                         <label style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer', fontSize: '0.9rem' }}>
-                                            <input 
-                                                type="checkbox" 
+                                            <input
+                                                type="checkbox"
                                                 checked={formData.depositPaid}
                                                 onChange={(e) => {
                                                     const checked = e.target.checked;
@@ -511,8 +752,8 @@ export default function ShipmentOrders({ currentUser, initialEditId, onClearEdit
                                             if (rate < 100) {
                                                 return (
                                                     <label style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer', fontSize: '0.9rem' }}>
-                                                        <input 
-                                                            type="checkbox" 
+                                                        <input
+                                                            type="checkbox"
                                                             checked={formData.balancePaid}
                                                             onChange={(e) => {
                                                                 const checked = e.target.checked;
@@ -529,22 +770,22 @@ export default function ShipmentOrders({ currentUser, initialEditId, onClearEdit
                                             }
                                             return null;
                                         })()}
-                                        
+
                                         {formData.depositPaid && (formData.balancePaid || (() => {
                                             const s = shippers.find(x => x.shipper_id == formData.shipper);
                                             return s && s.deposit === 100;
                                         })()) && (
-                                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginLeft: 'auto' }}>
-                                                <span style={{ fontSize: '0.85rem', color: '#64748b' }}>Payment Date:</span>
-                                                <input
-                                                    type="date"
-                                                    name="payment_date"
-                                                    value={formData.payment_date}
-                                                    onChange={handleFormChange}
-                                                    style={{ padding: '4px 8px', border: '1px solid #cbd5e1', borderRadius: '4px', outline: 'none', fontSize: '0.85rem' }}
-                                                />
-                                            </div>
-                                        )}
+                                                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginLeft: 'auto' }}>
+                                                    <span style={{ fontSize: '0.85rem', color: '#64748b' }}>Payment Date:</span>
+                                                    <input
+                                                        type="date"
+                                                        name="payment_date"
+                                                        value={formData.payment_date}
+                                                        onChange={handleFormChange}
+                                                        style={{ padding: '4px 8px', border: '1px solid #cbd5e1', borderRadius: '4px', outline: 'none', fontSize: '0.85rem' }}
+                                                    />
+                                                </div>
+                                            )}
                                     </div>
                                 )}
                             </div>
@@ -585,6 +826,27 @@ export default function ShipmentOrders({ currentUser, initialEditId, onClearEdit
                         <button type="submit" form="shipment-form" className="btn-primary" style={{ padding: '8px 24px' }}>
                             {formMode === 'add' ? 'Save Order' : 'Update Order'}
                         </button>
+                    </div>
+                </div>
+            )}
+            {showColumnModal && (
+                <div className="modal-overlay">
+                    <div className="modal-content" style={{ maxWidth: '400px' }}>
+                        <div className="modal-header">
+                            <h3>Display Columns</h3>
+                            <button className="btn-icon" onClick={() => setShowColumnModal(false)}><XCircle size={20} /></button>
+                        </div>
+                        <div className="modal-body" style={{ display: 'flex', flexDirection: 'column', gap: '12px', maxHeight: '400px', overflowY: 'auto' }}>
+                            {defaultCols.map(col => (
+                                <label key={col} style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
+                                    <input type="checkbox" checked={visibleColumns.includes(col)} onChange={() => toggleColumn(col)} />
+                                    {col.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}
+                                </label>
+                            ))}
+                        </div>
+                        <div className="modal-footer">
+                            <button className="btn-primary" onClick={() => setShowColumnModal(false)}>Close</button>
+                        </div>
                     </div>
                 </div>
             )}

@@ -161,7 +161,9 @@ export default function ContainerList({ currentUser, onNavigateToShipment }) {
     const syncTrackedContainers = async () => {
         try {
             const apiUrl = await getSetting('findteu_api_url', 'https://findteu.showtile-apis.workers.dev/api');
-            const apiKey = await getSetting('findteu_api_key', 'TAURI_API_KEY');
+            const apiKey = await getSetting('findteu_api_key', '');
+            if (!apiKey || apiKey === 'TAURI_API_KEY') return;
+
             const response = await fetch(`${apiUrl}/containers`, {
                 headers: { 'x-api-key': apiKey }
             });
@@ -344,7 +346,9 @@ export default function ContainerList({ currentUser, onNavigateToShipment }) {
     const handleUnsubscribe = async (subscriptionId) => {
         try {
             const apiUrl = await getSetting('findteu_api_url', 'https://findteu.showtile-apis.workers.dev/api');
-            const apiKey = await getSetting('findteu_api_key', 'TAURI_API_KEY');
+            const apiKey = await getSetting('findteu_api_key', '');
+            if (!apiKey || apiKey === 'TAURI_API_KEY') return true;
+
             const response = await fetch(`${apiUrl}/subscriptions/${subscriptionId}`, {
                 method: 'DELETE',
                 headers: { 'x-api-key': apiKey }
@@ -403,6 +407,13 @@ export default function ContainerList({ currentUser, onNavigateToShipment }) {
 
     const handleTrackClick = async (record) => {
         if (!canWrite) return;
+
+        const apiKey = await getSetting('findteu_api_key', '');
+        if (!apiKey || apiKey === 'TAURI_API_KEY') {
+            alert("Tracking is disabled. Please add a valid findTEU API Key in Settings first.");
+            return;
+        }
+
         if (!record.cntr_no) {
             alert("This container does not have a CNTR No. yet. Please edit and add one first.");
             return;
@@ -412,7 +423,6 @@ export default function ContainerList({ currentUser, onNavigateToShipment }) {
 
         try {
             const apiUrl = await getSetting('findteu_api_url', 'https://findteu.showtile-apis.workers.dev/api');
-            const apiKey = await getSetting('findteu_api_key', 'TAURI_API_KEY');
             const response = await fetch(`${apiUrl}/containers/${encodeURIComponent(record.cntr_no)}/track`, {
                 method: 'POST',
                 headers: {
@@ -720,27 +730,78 @@ export default function ContainerList({ currentUser, onNavigateToShipment }) {
         return true;
     });
 
-    const handleShipmentPaymentUpdate = async (shipmentId, field, value, otherFields = {}) => {
+    const handleContainerPaymentUpdate = async (containerId, sId, field, value, otherFields = {}) => {
         if (!canWrite) return;
         try {
             const db = await getDb();
 
-            let queryFields = [`${field} = $1`];
-            let values = [value];
-            let i = 2;
+            // 1. Update the Container's JSON fields
+            const [cntr] = await db.select('SELECT deposit, balance, payment_date FROM containers WHERE container_id = $1', [containerId]);
+            if (!cntr) return;
 
-            for (const [k, v] of Object.entries(otherFields)) {
-                queryFields.push(`${k} = $${i}`);
-                values.push(v);
-                i++;
+            let cDep = cntr.deposit ? JSON.parse(cntr.deposit) : {};
+            let cBal = cntr.balance ? JSON.parse(cntr.balance) : {};
+            let cPay = cntr.payment_date ? JSON.parse(cntr.payment_date) : {};
+
+            const applyField = (f, v) => {
+                if (f === 'deposit') { if (v != null) cDep[sId] = v; else delete cDep[sId]; }
+                else if (f === 'balance') { if (v != null) cBal[sId] = v; else delete cBal[sId]; }
+                else if (f === 'payment_date') { if (v != null) cPay[sId] = v; else delete cPay[sId]; }
+            };
+
+            applyField(field, value);
+            for (const [k, v] of Object.entries(otherFields)) applyField(k, v);
+
+            await db.execute('UPDATE containers SET deposit = $1, balance = $2, payment_date = $3 WHERE container_id = $4', [
+                JSON.stringify(cDep), JSON.stringify(cBal), JSON.stringify(cPay), containerId
+            ]);
+
+            // 2. Sync UPWARD to the Shipment Order
+            const allContainers = await db.select('SELECT container_id, contents, deposit, balance FROM containers');
+            let allDepositPaid = true;
+            let allBalancePaid = true;
+            let hasContainers = false;
+
+            for (const c of allContainers) {
+                try {
+                    const parsed = JSON.parse(c.contents || '[]');
+                    if (parsed.some(item => item.shipment_id == sId)) {
+                        hasContainers = true;
+                        const depObj = c.deposit ? JSON.parse(c.deposit) : {};
+                        const balObj = c.balance ? JSON.parse(c.balance) : {};
+
+                        if (depObj[sId] == null) allDepositPaid = false;
+                        if (balObj[sId] == null) allBalancePaid = false;
+                    }
+                } catch (e) { }
             }
-            values.push(shipmentId);
 
-            await db.execute(`UPDATE shipments SET ${queryFields.join(', ')} WHERE shipment_id = $${i}`, values);
+            if (hasContainers) {
+                const [shipment] = await db.select('SELECT shipper FROM shipments WHERE shipment_id = $1', [sId]);
+                if (shipment) {
+                    const [shipper] = await db.select('SELECT deposit FROM shippers WHERE shipper_id = $1', [shipment.shipper]);
+                    const rate = shipper ? (shipper.deposit || 0) : 0;
+
+                    const dbDep = allDepositPaid ? rate : null;
+                    const dbBal = allBalancePaid ? (rate === 100 ? 0 : (100 - rate)) : null;
+
+                    await db.execute(
+                        'UPDATE shipments SET deposit = $1, balance = $2 WHERE shipment_id = $3',
+                        [dbDep, dbBal, sId]
+                    );
+
+                    if (!allDepositPaid || (!allBalancePaid && rate < 100)) {
+                        await db.execute('UPDATE shipments SET payment_date = NULL WHERE shipment_id = $1', [sId]);
+                    } else if (allDepositPaid && (allBalancePaid || rate === 100)) {
+                        await db.execute('UPDATE shipments SET payment_date = COALESCE(payment_date, $1) WHERE shipment_id = $2', [new Date().toISOString().split('T')[0], sId]);
+                    }
+                }
+            }
 
             await loadMappings();
+            await loadRecords(activeYear);
         } catch (e) {
-            console.error("Failed to update shipment payment", e);
+            console.error("Failed to update container payment", e);
         }
     };
 
@@ -774,8 +835,8 @@ export default function ContainerList({ currentUser, onNavigateToShipment }) {
                 const today = new Date();
                 const diffDays = (deadline - today) / (1000 * 60 * 60 * 24);
 
-                if (diffDays <= 14) {
-                    return { backgroundColor: 'rgb(255 60 60 / 85%)', color: '#fff', borderRadius: '4px', padding: '2px 4px' }; // Red for overdue/nearly due
+                if (diffDays < 0) {
+                    return { backgroundColor: 'rgb(255 60 60 / 85%)', color: '#fff', borderRadius: '4px', padding: '2px 4px' }; // Red for strictly overdue
                 }
             }
         }
@@ -961,21 +1022,21 @@ export default function ContainerList({ currentUser, onNavigateToShipment }) {
                                 <thead>
                                     <tr>
                                         {canWrite && <th style={{ width: '80px', minWidth: '80px', textAlign: 'center' }}>Actions</th>}
-                                        {visibleColumns.includes('cntr_no') && <th style={{ width: '130px', minWidth: '130px', cursor: 'pointer' }} onClick={() => handleSort('cntr_no')}>Container No. <SortIcon columnKey="cntr_no" /></th>}
-                                        {visibleColumns.includes('hbl_no') && <th style={{ width: '120px', minWidth: '120px', cursor: 'pointer' }} onClick={() => handleSort('hbl_no')}>HBL No. <SortIcon columnKey="hbl_no" /></th>}
-                                        {visibleColumns.includes('shipper') && <th style={{ width: '150px', minWidth: '150px', cursor: 'pointer' }} onClick={() => handleSort('shipper')}>Shipper <SortIcon columnKey="shipper" /></th>}
-                                        {visibleColumns.includes('invoice_no') && <th style={{ width: '120px', minWidth: '120px', cursor: 'pointer' }} onClick={() => handleSort('invoice_no')}>Invoice No. <SortIcon columnKey="invoice_no" /></th>}
+                                        {visibleColumns.includes('cntr_no') && <th className="has-sort-icon" style={{ width: '130px', minWidth: '130px', cursor: 'pointer' }} onClick={() => handleSort('cntr_no')}><SortIcon columnKey="cntr_no" /> Container No. </th>}
+                                        {visibleColumns.includes('hbl_no') && <th className="has-sort-icon" style={{ width: '120px', minWidth: '120px', cursor: 'pointer' }} onClick={() => handleSort('hbl_no')}><SortIcon columnKey="hbl_no" /> HBL No.</th>}
+                                        {visibleColumns.includes('shipper') && <th className="has-sort-icon" style={{ width: '150px', minWidth: '150px', cursor: 'pointer' }} onClick={() => handleSort('shipper')}><SortIcon columnKey="shipper" /> Shipper</th>}
+                                        {visibleColumns.includes('invoice_no') && <th className="has-sort-icon" style={{ width: '120px', minWidth: '120px', cursor: 'pointer' }} onClick={() => handleSort('invoice_no')}><SortIcon columnKey="invoice_no" /> Invoice No.</th>}
                                         {visibleColumns.includes('payment') && <th style={{ width: '240px', minWidth: '240px' }}>Payment</th>}
                                         {visibleColumns.includes('doc') && <th style={{ width: '60px', minWidth: '60px' }}>Doc</th>}
-                                        {visibleColumns.includes('contents') && <th style={{ width: '400px', minWidth: '250px', cursor: 'pointer' }} onClick={() => handleSort('contents')}>Contents <SortIcon columnKey="contents" /></th>}
-                                        {visibleColumns.includes('tracking') && <th style={{ width: '100px', minWidth: '100px', cursor: 'pointer' }} onClick={() => handleSort('track_status')}>Tracking <SortIcon columnKey="track_status" /></th>}
-                                        {visibleColumns.includes('pol') && <th style={{ width: '150px', minWidth: '100px', cursor: 'pointer' }} onClick={() => handleSort('pol')}>POL <SortIcon columnKey="pol" /></th>}
-                                        {visibleColumns.includes('etd') && <th style={{ width: '100px', minWidth: '100px', cursor: 'pointer' }} onClick={() => handleSort('etd')}>ETD <SortIcon columnKey="etd" /></th>}
-                                        {visibleColumns.includes('eta') && <th style={{ width: '100px', minWidth: '100px', cursor: 'pointer' }} onClick={() => handleSort('eta')}>ETA <SortIcon columnKey="eta" /></th>}
-                                        {visibleColumns.includes('original_eta') && <th style={{ width: '130px', minWidth: '130px', cursor: 'pointer' }} onClick={() => handleSort('original_eta')}>Original ETA <SortIcon columnKey="original_eta" /></th>}
-                                        {visibleColumns.includes('delivery') && <th style={{ width: '130px', minWidth: '130px', cursor: 'pointer' }} onClick={() => handleSort('delivery')}>Delivery <SortIcon columnKey="delivery" /></th>}
-                                        {visibleColumns.includes('info') && <th style={{ width: '150px', minWidth: '150px', cursor: 'pointer' }} onClick={() => handleSort('info')}>Info <SortIcon columnKey="info" /></th>}
-                                        {visibleColumns.includes('last_free_dtn') && <th style={{ width: '130px', minWidth: '130px', cursor: 'pointer' }} onClick={() => handleSort('last_free_dtn')}>Last Free DTN <SortIcon columnKey="last_free_dtn" /></th>}
+                                        {visibleColumns.includes('contents') && <th className="has-sort-icon" style={{ width: '400px', minWidth: '250px', cursor: 'pointer' }} onClick={() => handleSort('contents')}><SortIcon columnKey="contents" /> Contents</th>}
+                                        {visibleColumns.includes('tracking') && <th className="has-sort-icon" style={{ width: '100px', minWidth: '100px', cursor: 'pointer' }} onClick={() => handleSort('track_status')}><SortIcon columnKey="track_status" /> Tracking</th>}
+                                        {visibleColumns.includes('pol') && <th className="has-sort-icon" style={{ width: '150px', minWidth: '100px', cursor: 'pointer' }} onClick={() => handleSort('pol')}><SortIcon columnKey="pol" /> POL</th>}
+                                        {visibleColumns.includes('etd') && <th className="has-sort-icon" style={{ width: '100px', minWidth: '100px', cursor: 'pointer' }} onClick={() => handleSort('etd')}><SortIcon columnKey="etd" /> ETD</th>}
+                                        {visibleColumns.includes('eta') && <th className="has-sort-icon" style={{ width: '100px', minWidth: '100px', cursor: 'pointer' }} onClick={() => handleSort('eta')}><SortIcon columnKey="eta" /> ETA</th>}
+                                        {visibleColumns.includes('original_eta') && <th className="has-sort-icon" style={{ width: '130px', minWidth: '130px', cursor: 'pointer' }} onClick={() => handleSort('original_eta')}><SortIcon columnKey="original_eta" /> Original ETA</th>}
+                                        {visibleColumns.includes('delivery') && <th className="has-sort-icon" style={{ width: '130px', minWidth: '130px', cursor: 'pointer' }} onClick={() => handleSort('delivery')}><SortIcon columnKey="delivery" /> Delivery</th>}
+                                        {visibleColumns.includes('info') && <th className="has-sort-icon" style={{ width: '150px', minWidth: '150px', cursor: 'pointer' }} onClick={() => handleSort('info')}><SortIcon columnKey="info" /> Info</th>}
+                                        {visibleColumns.includes('last_free_dtn') && <th className="has-sort-icon" style={{ width: '130px', minWidth: '130px', cursor: 'pointer' }} onClick={() => handleSort('last_free_dtn')}><SortIcon columnKey="last_free_dtn" /> Last Free DTN</th>}
                                         {canWrite && <th style={{ width: '40px', minWidth: '40px' }}></th>}
                                     </tr>
                                 </thead>
@@ -1037,11 +1098,22 @@ export default function ContainerList({ currentUser, onNavigateToShipment }) {
                                                                 const shipper = shippersMap[shipment.shipper];
                                                                 const rate = shipper ? (shipper.deposit || 0) : 0;
 
-                                                                const isDepositPaid = shipment.deposit != null;
-                                                                const isBalancePaid = shipment.balance != null;
+                                                                let cDep = {};
+                                                                let cBal = {};
+                                                                let cPay = {};
+                                                                try { if (row.deposit) cDep = JSON.parse(row.deposit); } catch (e) { }
+                                                                try { if (row.balance) cBal = JSON.parse(row.balance); } catch (e) { }
+                                                                try { if (row.payment_date) cPay = JSON.parse(row.payment_date); } catch (e) { }
+
+                                                                const isDepositPaid = cDep[sId] != null;
+                                                                const isBalancePaid = cBal[sId] != null;
+                                                                const currentPaymentDate = cPay[sId] || '';
+
+                                                                const isPaid = (rate === 0 || isDepositPaid) && (rate === 100 ? isDepositPaid : isBalancePaid);
+                                                                const overdueStyle = getPaymentStyle(isPaid, sId, row.etd);
 
                                                                 return (
-                                                                    <div key={i} style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                                                                    <div key={i} style={{ display: 'flex', flexDirection: 'column', gap: '4px', ...overdueStyle }}>
                                                                         <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
                                                                             <label style={{ display: 'flex', alignItems: 'center', gap: '4px', cursor: canWrite ? 'pointer' : 'default', fontSize: '0.8rem' }}>
                                                                                 <input
@@ -1051,8 +1123,8 @@ export default function ContainerList({ currentUser, onNavigateToShipment }) {
                                                                                     onChange={(e) => {
                                                                                         const checked = e.target.checked;
                                                                                         let dbDeposit = checked ? rate : null;
-                                                                                        let dbBalance = isBalancePaid ? shipment.balance : null;
-                                                                                        let dbPaymentDate = shipment.payment_date;
+                                                                                        let dbBalance = isBalancePaid ? (cBal[sId]) : null;
+                                                                                        let dbPaymentDate = currentPaymentDate;
 
                                                                                         if (rate === 100) {
                                                                                             if (checked) {
@@ -1063,7 +1135,7 @@ export default function ContainerList({ currentUser, onNavigateToShipment }) {
                                                                                                 dbPaymentDate = null;
                                                                                             }
                                                                                         }
-                                                                                        handleShipmentPaymentUpdate(sId, 'deposit', dbDeposit, { balance: dbBalance, payment_date: dbPaymentDate });
+                                                                                        handleContainerPaymentUpdate(row.container_id, sId, 'deposit', dbDeposit, { balance: dbBalance, payment_date: dbPaymentDate });
                                                                                     }}
                                                                                 />
                                                                                 {rate}%
@@ -1078,8 +1150,8 @@ export default function ContainerList({ currentUser, onNavigateToShipment }) {
                                                                                         onChange={(e) => {
                                                                                             const checked = e.target.checked;
                                                                                             let dbBalance = checked ? (100 - rate) : null;
-                                                                                            let dbPaymentDate = (checked && isDepositPaid && !shipment.payment_date) ? new Date().toISOString().split('T')[0] : shipment.payment_date;
-                                                                                            handleShipmentPaymentUpdate(sId, 'balance', dbBalance, { payment_date: dbPaymentDate });
+                                                                                            let dbPaymentDate = (checked && isDepositPaid && !currentPaymentDate) ? new Date().toISOString().split('T')[0] : currentPaymentDate;
+                                                                                            handleContainerPaymentUpdate(row.container_id, sId, 'balance', dbBalance, { payment_date: dbPaymentDate });
                                                                                         }}
                                                                                     />
                                                                                     {100 - rate}%
@@ -1089,9 +1161,9 @@ export default function ContainerList({ currentUser, onNavigateToShipment }) {
                                                                             {isDepositPaid && (isBalancePaid || rate === 100) && (
                                                                                 <input
                                                                                     type="date"
-                                                                                    value={shipment.payment_date || ''}
+                                                                                    value={currentPaymentDate}
                                                                                     disabled={!canWrite}
-                                                                                    onChange={(e) => handleShipmentPaymentUpdate(sId, 'payment_date', e.target.value)}
+                                                                                    onChange={(e) => handleContainerPaymentUpdate(row.container_id, sId, 'payment_date', e.target.value)}
                                                                                     style={{ padding: '0px 4px', border: '1px solid #cbd5e1', borderRadius: '4px', fontSize: '0.75rem', outline: 'none' }}
                                                                                 />
                                                                             )}

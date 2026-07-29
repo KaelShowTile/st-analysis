@@ -51,10 +51,31 @@ export const getDb = async () => {
 
             const db = await Database.load(connectionString);
             await initializeTables(db);
+            // Ensure new columns exist in containers table
+            try { await db.execute('ALTER TABLE containers ADD COLUMN deposit TEXT'); } catch(e) {}
+            try { await db.execute('ALTER TABLE containers ADD COLUMN balance TEXT'); } catch(e) {}
+            try { await db.execute('ALTER TABLE containers ADD COLUMN payment_date TEXT'); } catch(e) {}
+            
+            // Ensure new columns exist in reports table
+            try { await db.execute('ALTER TABLE reports ADD COLUMN ignore INTEGER DEFAULT 0'); } catch(e) {}
+
+            console.log('Database initialized successfully.');
             return db;
         })();
     }
     return dbPromise;
+};
+
+export const closeDb = async () => {
+    if (dbPromise) {
+        try {
+            const db = await dbPromise;
+            await db.close();
+        } catch (e) {
+            console.error("Error closing db", e);
+        }
+        dbPromise = null;
+    }
 };
 
 const initializeTables = async (db) => {
@@ -180,7 +201,10 @@ const initializeTables = async (db) => {
             delivery TEXT,
             info TEXT,
             internal_memo TEXT,
-            last_free_dtn TEXT
+            last_free_dtn TEXT,
+            deposit TEXT,
+            balance TEXT,
+            payment_date TEXT
         )
     `);
 
@@ -253,6 +277,7 @@ const initializeTables = async (db) => {
     const usersCount = await db.select("SELECT COUNT(*) as count FROM users");
     if (usersCount[0].count === 0) {
         const fullPermissions = JSON.stringify({
+            admin: true,
             inventory: { read: true, write: true },
             sales: { read: true, write: true },
             reports: { read: true, write: true },
@@ -264,13 +289,24 @@ const initializeTables = async (db) => {
             ['showtile', 'showtile123', fullPermissions]
         );
     } else {
-        // Migration to add containers permissions to existing users
-        const allUsers = await db.select("SELECT id, permissions FROM users");
+        // Migration to add containers permissions and admin role to existing users
+        const allUsers = await db.select("SELECT id, permissions, username FROM users");
         for (const user of allUsers) {
             try {
                 const p = JSON.parse(user.permissions || '{}');
+                let updated = false;
+                
                 if (!p.containers) {
                     p.containers = { read: true, write: true };
+                    updated = true;
+                }
+                
+                if (p.admin === undefined && (user.id === 1 || user.username === 'showtile' || user.username === 'admin')) {
+                    p.admin = true;
+                    updated = true;
+                }
+
+                if (updated) {
                     await db.execute("UPDATE users SET permissions = $1 WHERE id = $2", [JSON.stringify(p), user.id]);
                 }
             } catch (e) {

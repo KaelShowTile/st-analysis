@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo } from 'react';
 import { getDb } from '../db/Database';
-import { Plus, Search, Trash2, Save, X, PlusCircle, Sparkles, Download, RefreshCw, Printer, GripVertical } from 'lucide-react';
+import { Plus, Search, Trash2, Save, X, PlusCircle, Sparkles, Download, RefreshCw, Printer, GripVertical, ChevronUp, ChevronDown } from 'lucide-react';
 import { save } from '@tauri-apps/plugin-dialog';
 import { writeTextFile } from '@tauri-apps/plugin-fs';
 import { DragDropContext, Droppable, Draggable } from '@hello-pangea/dnd';
@@ -21,6 +21,7 @@ export default function Reports({ currentUser, initialReportId }) {
     const [showAddReport, setShowAddReport] = useState(false);
     const [editReportId, setEditReportId] = useState(null);
     const [newReportName, setNewReportName] = useState('');
+    const [reportIgnore, setReportIgnore] = useState(false);
     const [reportSearchTerm, setReportSearchTerm] = useState('');
     const [selectedProducts, setSelectedProducts] = useState([]);
 
@@ -28,6 +29,7 @@ export default function Reports({ currentUser, initialReportId }) {
     const [showAddSize, setShowAddSize] = useState(false);
     const [newSizeName, setNewSizeName] = useState('');
     const [showAddColour, setShowAddColour] = useState(false);
+    const [colourSearchTerm, setColourSearchTerm] = useState('');
 
     // Sort and Search state for reports list
     const [reportSortDir, setReportSortDir] = useState('az'); // 'az' or 'za'
@@ -116,6 +118,14 @@ export default function Reports({ currentUser, initialReportId }) {
             setSavingReport(false);
         }
     };
+
+    useEffect(() => {
+        if (!activeReport) return;
+        const timer = setTimeout(() => {
+            saveReportData();
+        }, 1500);
+        return () => clearTimeout(timer);
+    }, [activeReport]);
 
     const generateReportHTML = (smallerFont = false) => {
         if (!activeReport || !activeReport.data) return '';
@@ -293,6 +303,7 @@ export default function Reports({ currentUser, initialReportId }) {
         if (!canWrite) return;
         if (!name) return;
         const db = await getDb();
+        const ignoreVal = reportIgnore ? 1 : 0;
 
         if (editReportId) {
             // Update existing report
@@ -300,7 +311,7 @@ export default function Reports({ currentUser, initialReportId }) {
             currentData.productNames = selectedProducts;
             const jsonData = JSON.stringify(currentData);
 
-            await db.execute('UPDATE reports SET name = $1, data = $2 WHERE id = $3', [name, jsonData, editReportId]);
+            await db.execute('UPDATE reports SET name = $1, data = $2, ignore = $3 WHERE id = $4', [name, jsonData, ignoreVal, editReportId]);
             await loadCoreData();
             loadReportData(editReportId);
         } else {
@@ -311,8 +322,8 @@ export default function Reports({ currentUser, initialReportId }) {
             const startStr = today.toISOString().split('T')[0];
 
             const emptyData = JSON.stringify({ finishes: [], productNames: selectedProducts });
-            const result = await db.execute('INSERT INTO reports (name, start_date, end_date, data) VALUES ($1, $2, $3, $4)',
-                [name, startStr, endStr, emptyData]);
+            const result = await db.execute('INSERT INTO reports (name, start_date, end_date, data, ignore) VALUES ($1, $2, $3, $4, $5)',
+                [name, startStr, endStr, emptyData, ignoreVal]);
             await loadCoreData();
             loadReportData(result.lastInsertId);
         }
@@ -322,6 +333,7 @@ export default function Reports({ currentUser, initialReportId }) {
         setSelectedProducts([]);
         setEditReportId(null);
         setReportSearchTerm('');
+        setReportIgnore(false);
     };
 
     const updateActiveReportData = (newData) => {
@@ -570,6 +582,7 @@ export default function Reports({ currentUser, initialReportId }) {
 
         finish.colours.push(colourName);
         finish.sizes.forEach(size => {
+            if (size.colours) size.colours.push(colourName);
             size.cells[colourName] = { skus: [], order: 0 };
         });
         updateActiveReportData(d);
@@ -591,6 +604,38 @@ export default function Reports({ currentUser, initialReportId }) {
         if (!d.finishes[activeFinishIdx].sizes[sizeIdx].cells[colourName]) return;
         d.finishes[activeFinishIdx].sizes[sizeIdx].cells[colourName].deleted = true;
         updateActiveReportData(d);
+    };
+
+    const handleMoveColour = (sizeIdx, colourName, direction) => {
+        if (!canWrite) return;
+        const d = cloneData();
+        const finish = d.finishes[activeFinishIdx];
+        const size = finish.sizes[sizeIdx];
+
+        if (!size.colours) {
+            size.colours = [...finish.colours];
+        }
+
+        const activeColours = size.colours.filter(c => {
+            const cell = size.cells[c];
+            return cell && !cell.deleted;
+        });
+
+        const activeIdx = activeColours.indexOf(colourName);
+        if (activeIdx === -1) return;
+
+        let swapTarget = null;
+        if (direction === 'up' && activeIdx > 0) swapTarget = activeColours[activeIdx - 1];
+        if (direction === 'down' && activeIdx < activeColours.length - 1) swapTarget = activeColours[activeIdx + 1];
+
+        if (swapTarget) {
+            const idx1 = size.colours.indexOf(colourName);
+            const idx2 = size.colours.indexOf(swapTarget);
+            const temp = size.colours[idx1];
+            size.colours[idx1] = size.colours[idx2];
+            size.colours[idx2] = temp;
+            updateActiveReportData(d);
+        }
     };
 
     const autoGenerate = async () => {
@@ -661,6 +706,12 @@ export default function Reports({ currentUser, initialReportId }) {
                     <td style={totalStyle}>{parseFloat(total.toFixed(2))}</td>
                     <td>0</td>
                     <td>0</td>
+                    {canWrite && (
+                        <td style={{ textAlign: 'center' }}>
+                            <ChevronUp size={16} style={{ cursor: 'pointer', opacity: 0.6, marginRight: '4px' }} onClick={() => handleMoveColour(sizeIdx, colour, 'up')} />
+                            <ChevronDown size={16} style={{ cursor: 'pointer', opacity: 0.6 }} onClick={() => handleMoveColour(sizeIdx, colour, 'down')} />
+                        </td>
+                    )}
                 </tr>
             );
         }
@@ -669,7 +720,7 @@ export default function Reports({ currentUser, initialReportId }) {
             <>
                 <tr key={`${size.name}-${colour}-main`}>
                     <td rowSpan={rowSpan} style={{ minWidth: '150px' }}>
-                        <div style={{ display: 'flex', flexWrap: 'wrap', flexDirection: 'row', height: '100%', minHeight: '40px' }}>
+                        <div style={{ display: 'flex', flexWrap: 'wrap', flexDirection: 'row', height: '100%' }}>
                             {canWrite && <Trash2 size={14} style={{ cursor: 'pointer', opacity: 0.5, color: '#ef4444', marginTop: '3px', marginRight: '3px' }} onClick={() => handleDeleteColour(sizeIdx, colour)} />}
                             <div style={{ textTransform: 'capitalize' }}>
                                 {colour} {canWrite && <span className="action-text" style={{ fontSize: '0.8rem', marginLeft: '2px' }} onClick={() => openSkuModal(sizeIdx, colour, skus)}>[Edit]</span>}
@@ -685,6 +736,12 @@ export default function Reports({ currentUser, initialReportId }) {
                     <td rowSpan={rowSpan} style={totalStyle}>{parseFloat(total.toFixed(2))}</td>
                     <td rowSpan={rowSpan} style={{ fontWeight: 'bold', color: 'var(--primary-color)' }}>{parseFloat(cellTotalSale.toFixed(2))}</td>
                     <td rowSpan={rowSpan} style={{ fontWeight: 'bold', color: 'var(--primary-color)' }}>{parseFloat(cycle.toFixed(2))}</td>
+                    {canWrite && (
+                        <td rowSpan={rowSpan} style={{ borderRightWidth: '0' }}>
+                            <ChevronUp size={16} style={{ cursor: 'pointer', opacity: 0.6, marginRight: '4px' }} onClick={() => handleMoveColour(sizeIdx, colour, 'up')} />
+                            <ChevronDown size={16} style={{ cursor: 'pointer', opacity: 0.6 }} onClick={() => handleMoveColour(sizeIdx, colour, 'down')} />
+                        </td>
+                    )}
                 </tr >
                 {
                     skuStats.slice(1).map((s, i) => (
@@ -779,6 +836,7 @@ export default function Reports({ currentUser, initialReportId }) {
                                     <button className="btn-upload" style={{ margin: '5px 15px 0', background: 'transparent', border: '1px solid #cbd5e1', color: '#64748b', padding: '4px 8px', fontSize: '12px', float: 'left' }} onClick={() => {
                                         setEditReportId(activeReport.id);
                                         setNewReportName(activeReport.name);
+                                        setReportIgnore(activeReport.ignore === 1);
                                         setSelectedProducts(activeReport.data?.productNames || []);
                                         setShowAddReport(true);
                                     }}>
@@ -811,7 +869,7 @@ export default function Reports({ currentUser, initialReportId }) {
                                         <Download size={16} /> Export HTML
                                     </button>
                                     {canWrite && (
-                                        <button className="btn-upload" onClick={autoGenerate} style={{ background: 'var(--bg-color)', color: 'var(--text-color)' }}>
+                                        <button className="btn-upload" onClick={autoGenerate} style={{ background: 'var(--bg-color)', color: 'var(--text-color)', border: '1px solid #cbd5e1' }}>
                                             <Sparkles size={16} /> Auto Generate
                                         </button>
                                     )}
@@ -898,24 +956,25 @@ export default function Reports({ currentUser, initialReportId }) {
                                                                     <thead>
                                                                         <tr>
                                                                             <th style={{ width: '120px' }}>Colour</th>
-                                                                            <th>SKU</th>
-                                                                            <th>In-date</th>
-                                                                            <th className="num">Available</th>
+                                                                            <th style={{ width: '100px' }}>SKU</th>
+                                                                            <th style={{ width: '100px' }}>In-date</th>
+                                                                            <th className="num" style={{ width: '100px' }}>Available</th>
                                                                             <th className="num" style={{ width: '80px' }}>Order</th>
                                                                             <th className="num" style={{ width: '80px' }}>Total</th>
                                                                             <th className="num" style={{ width: '80px' }}>Sale</th>
                                                                             <th className="num" style={{ width: '80px' }}>Cycle</th>
+                                                                            {canWrite && <th style={{ width: '60px', borderRightWidth: '0' }}>Actions</th>}
                                                                         </tr>
                                                                     </thead>
                                                                     <tbody>
-                                                                        {activeReport.data.finishes[activeFinishIdx].colours
+                                                                        {(size.colours || activeReport.data.finishes[activeFinishIdx].colours)
                                                                             .filter(colour => !size.cells[colour]?.deleted)
                                                                             .map(colour => (
                                                                                 renderCellRows(sizeIdx, size, colour)
                                                                             ))}
                                                                         {canWrite && (
                                                                             <tr>
-                                                                                <td colSpan="8" style={{ textAlign: 'center', backgroundColor: 'var(--bg-color)' }}>
+                                                                                <td colSpan={canWrite ? 9 : 8} style={{ textAlign: 'center', backgroundColor: 'var(--bg-color)', borderRightWidth: '0' }}>
                                                                                     <span className="action-text" onClick={() => setShowAddColour(true)}>+ Add New Colour Row</span>
                                                                                 </td>
                                                                             </tr>
@@ -987,7 +1046,17 @@ export default function Reports({ currentUser, initialReportId }) {
                                 value={newReportName}
                                 onChange={(e) => setNewReportName(e.target.value)}
                                 placeholder="e.g. Matt Collection"
+                                style={{ marginBottom: '12px' }}
                             />
+                            <label style={{ display: 'flex', alignItems: 'center', cursor: 'pointer', fontWeight: 'normal' }}>
+                                <input
+                                    type="checkbox"
+                                    checked={reportIgnore}
+                                    onChange={(e) => setReportIgnore(e.target.checked)}
+                                    style={{ marginRight: '8px' }}
+                                />
+                                Ignore low stock warning
+                            </label>
                         </div>
 
                         <div style={{ marginBottom: '16px' }}>
@@ -1016,7 +1085,7 @@ export default function Reports({ currentUser, initialReportId }) {
                         </div>
 
                         <div className="modal-actions" style={{ display: 'flex', gap: '5px', justifyContent: 'flex-end' }}>
-                            <button className="btn-primary" onClick={() => { setShowAddReport(false); setEditReportId(null); setNewReportName(''); setSelectedProducts([]); setReportSearchTerm(''); }}>Cancel</button>
+                            <button className="btn-primary" onClick={() => { setShowAddReport(false); setEditReportId(null); setNewReportName(''); setSelectedProducts([]); setReportSearchTerm(''); setReportIgnore(false); }}>Cancel</button>
                             <button className="btn-primary" onClick={() => saveReportSettings(newReportName)} disabled={!newReportName || selectedProducts.length === 0}>
                                 {editReportId ? 'Save Changes' : 'Create Report'}
                             </button>
@@ -1047,14 +1116,27 @@ export default function Reports({ currentUser, initialReportId }) {
                 <div className="modal-overlay" onClick={() => setShowAddColour(false)}>
                     <div className="modal-content" style={{ width: '400px' }} onClick={e => e.stopPropagation()}>
                         <div className="modal-header">
-                            <h3>Add Colour Row (Syncs across all Sizes)</h3>
+                            <h3>Add Colour Row</h3>
                             <X size={20} style={{ cursor: 'pointer' }} onClick={() => setShowAddColour(false)} />
                         </div>
                         <div className="modal-body">
-                            <div className="select-list">
-                                {attributes.colours.map(c => (
-                                    <div key={c} className="select-item" onClick={() => handleAddColour(c)}>{c}</div>
-                                ))}
+                            <div style={{ position: 'relative', marginBottom: '12px' }}>
+                                <Search size={14} style={{ position: 'absolute', left: '8px', top: '50%', transform: 'translateY(-50%)', color: '#94a3b8' }} />
+                                <input
+                                    type="text"
+                                    placeholder="Search colours..."
+                                    value={colourSearchTerm}
+                                    onChange={(e) => setColourSearchTerm(e.target.value)}
+                                    style={{ width: '100%', padding: '8px 8px 8px 28px', border: '1px solid #cbd5e1', borderRadius: '4px', outline: 'none' }}
+                                />
+                            </div>
+                            <div className="select-list" style={{ maxHeight: '300px', overflowY: 'auto' }}>
+                                {attributes.colours
+                                    .filter(c => c.toLowerCase().includes(colourSearchTerm.toLowerCase()))
+                                    .sort((a, b) => a.localeCompare(b))
+                                    .map(c => (
+                                        <div key={c} className="select-item" onClick={() => handleAddColour(c)}>{c}</div>
+                                    ))}
                             </div>
                         </div>
                     </div>

@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Home, LayoutDashboard, Settings as SettingsIcon, Sun, Moon, Receipt, BarChart2, LogOut, Box } from 'lucide-react';
 import { getDb, getDbPath } from './db/Database';
-import { appDataDir, join } from '@tauri-apps/api/path';
+import { appDataDir, join, dirname } from '@tauri-apps/api/path';
 import { copyFile, mkdir, readDir, remove, exists } from '@tauri-apps/plugin-fs';
 import './App.css';
 import Dashboard from './pages/Dashboard';
@@ -33,7 +33,14 @@ function App() {
                 const customDb = await getDbPath();
                 const dbPath = customDb ? customDb : await join(appDir, 'inventory.db');
                 if (await exists(dbPath)) {
-                    const backupDir = await join(appDir, 'backups');
+                    let backupDir;
+                    if (customDb) {
+                        const dbDir = await dirname(customDb);
+                        backupDir = await join(dbDir, 'backups');
+                    } else {
+                        backupDir = await join(appDir, 'backups');
+                    }
+
                     if (!(await exists(backupDir))) {
                         await mkdir(backupDir, { recursive: true });
                     }
@@ -42,13 +49,13 @@ function App() {
                     const backupPath = await join(backupDir, `inventory_backup_${timestamp}.db`);
                     await copyFile(dbPath, backupPath);
                     
-                    // Cleanup old backups (keep latest 5)
+                    // Cleanup old backups (keep latest 10)
                     const files = await readDir(backupDir);
                     const backups = files.filter(f => f.name && f.name.startsWith('inventory_backup_') && f.name.endsWith('.db'));
                     backups.sort((a, b) => b.name.localeCompare(a.name)); // sort descending (newest first)
                     
-                    if (backups.length > 5) {
-                        const toDelete = backups.slice(5);
+                    if (backups.length > 10) {
+                        const toDelete = backups.slice(10);
                         for (const f of toDelete) {
                             await remove(await join(backupDir, f.name));
                         }

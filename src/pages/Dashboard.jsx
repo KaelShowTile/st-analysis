@@ -14,7 +14,7 @@ export default function Dashboard({ currentUser, onNavigate }) {
             const db = await getDb();
 
             // Load all reports
-            const reports = await db.select('SELECT id, name, start_date, end_date, data FROM reports');
+            const reports = await db.select('SELECT id, name, start_date, end_date, data, ignore FROM reports');
 
             // Load Inventory
             const inv = await db.select('SELECT sku, available, total_qty, days, holding, so_qty FROM inventory');
@@ -44,6 +44,7 @@ export default function Dashboard({ currentUser, onNavigate }) {
                 }
 
                 if (!parsedData.finishes) return;
+                if (report.ignore === 1) return;
 
                 // Ensure report has start_date if missing but end_date exists
                 let startDate = report.start_date;
@@ -95,8 +96,19 @@ export default function Dashboard({ currentUser, onNavigate }) {
         loadData();
     }, []);
 
+    const handleIgnoreReport = async (reportId) => {
+        if (!window.confirm("Are you sure you want to ignore low stock alerts for this report?")) return;
+        try {
+            const db = await getDb();
+            await db.execute('UPDATE reports SET ignore = 1 WHERE id = $1', [reportId]);
+            loadData();
+        } catch (e) {
+            console.error("Failed to ignore report", e);
+        }
+    };
+
     return (
-        <div className="dashboard-layout">
+        <div className="dashboard-container">
             <div className="dashboard-header">
                 <h2><Package size={24} style={{ marginRight: '10px' }} /> Overview Dashboard</h2>
                 <p>Welcome back, {currentUser?.username || 'User'}</p>
@@ -135,6 +147,13 @@ export default function Dashboard({ currentUser, onNavigate }) {
                                                     onClick={() => onNavigate('reports', item.reportId)}
                                                 >
                                                     View Report
+                                                </button>
+                                                <button 
+                                                    className="btn-view"
+                                                    style={{ marginLeft: '8px', background: 'transparent', border: '1px solid #cbd5e1', color: '#64748b' }}
+                                                    onClick={() => handleIgnoreReport(item.reportId)}
+                                                >
+                                                    Ignore
                                                 </button>
                                             </td>
                                         </tr>

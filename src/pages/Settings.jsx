@@ -1,11 +1,11 @@
 import { useState, useEffect } from 'react';
-import { getDb, getDbPath, getSetting, setSetting } from '../db/Database';
+import { getDb, getDbPath, getSetting, setSetting, closeDb } from '../db/Database';
 import { save } from '@tauri-apps/plugin-dialog';
 import { writeTextFile } from '@tauri-apps/plugin-fs';
 import './Settings.css';
 import { Trash2, Plus, Download, Upload, DatabaseBackup, RotateCcw, FolderOpen, Edit3, X, UserCog } from 'lucide-react';
-import { appDataDir, join } from '@tauri-apps/api/path';
-import { readDir, copyFile, exists } from '@tauri-apps/plugin-fs';
+import { appDataDir, join, dirname } from '@tauri-apps/api/path';
+import { readDir, copyFile, exists, mkdir } from '@tauri-apps/plugin-fs';
 import { load } from '@tauri-apps/plugin-store';
 
 export default function Settings({ currentUser }) {
@@ -19,12 +19,12 @@ export default function Settings({ currentUser }) {
     const [findTeuApi, setFindTeuApi] = useState('https://findteu.showtile-apis.workers.dev/api');
     const [findTeuApiKey, setFindTeuApiKey] = useState('TAURI_API_KEY');
 
-    const isAdmin = currentUser?.username === 'admin';
+    const isAdmin = currentUser?.permissions?.admin === true;
     const [users, setUsers] = useState([]);
     const [showUserModal, setShowUserModal] = useState(false);
     const [editingUserId, setEditingUserId] = useState(null);
     const [userForm, setUserForm] = useState({
-        username: '', password: '', 
+        username: '', password: '',
         permissions: {
             inventory: { read: false, write: false },
             sales: { read: false, write: false },
@@ -36,7 +36,7 @@ export default function Settings({ currentUser }) {
 
     const loadDbPath = async () => {
         const store = await load('settings.json', { autoSave: false });
-        
+
         const path = await getDbPath();
         if (path) {
             setCurrentDbPath(path);
@@ -76,13 +76,42 @@ export default function Settings({ currentUser }) {
             });
 
             if (newPath) {
-                // Copy current DB to new path
                 const appDir = await appDataDir();
                 const currentCustomPath = await getDbPath();
                 const sourcePath = currentCustomPath ? currentCustomPath : await join(appDir, 'inventory.db');
-                
+
+                // Determine backup directories
+                let sourceBackupDir;
+                if (currentCustomPath) {
+                    const dbDir = await dirname(currentCustomPath);
+                    sourceBackupDir = await join(dbDir, 'backups');
+                } else {
+                    sourceBackupDir = await join(appDir, 'backups');
+                }
+
+                const newDbDir = await dirname(newPath);
+                const targetBackupDir = await join(newDbDir, 'backups');
+
+                // Close DB connection to release lock on Windows
+                await closeDb();
+
                 if (await exists(sourcePath)) {
                     await copyFile(sourcePath, newPath);
+                }
+
+                // Move backups
+                if (await exists(sourceBackupDir)) {
+                    if (!(await exists(targetBackupDir))) {
+                        await mkdir(targetBackupDir, { recursive: true });
+                    }
+                    const files = await readDir(sourceBackupDir);
+                    for (const file of files) {
+                        if (file.name && file.name.endsWith('.db')) {
+                            const srcFile = await join(sourceBackupDir, file.name);
+                            const destFile = await join(targetBackupDir, file.name);
+                            await copyFile(srcFile, destFile);
+                        }
+                    }
                 }
 
                 // Save new path to Store
@@ -108,11 +137,19 @@ export default function Settings({ currentUser }) {
     const loadBackups = async () => {
         try {
             const appDir = await appDataDir();
-            const backupDir = await join(appDir, 'backups');
+            const customDb = await getDbPath();
+            let backupDir;
+            if (customDb) {
+                const dbDir = await dirname(customDb);
+                backupDir = await join(dbDir, 'backups');
+            } else {
+                backupDir = await join(appDir, 'backups');
+            }
+            if (!(await exists(backupDir))) return;
             const files = await readDir(backupDir);
             const backupFiles = files.filter(f => f.name && f.name.startsWith('inventory_backup_') && f.name.endsWith('.db'));
             backupFiles.sort((a, b) => b.name.localeCompare(a.name));
-            
+
             const formatted = backupFiles.map(f => {
                 const tsStr = f.name.replace('inventory_backup_', '').replace('.db', '');
                 const ts = parseInt(tsStr, 10);
@@ -179,16 +216,16 @@ export default function Settings({ currentUser }) {
 
     const handleSaveUser = async () => {
         if (!userForm.username || !userForm.password) return alert("Username and password are required.");
-        
+
         const db = await getDb();
         const perms = JSON.stringify(userForm.permissions);
-        
+
         try {
             if (editingUserId) {
-                await db.execute('UPDATE users SET username = $1, password = $2, permissions = $3 WHERE id = $4', 
+                await db.execute('UPDATE users SET username = $1, password = $2, permissions = $3 WHERE id = $4',
                     [userForm.username, userForm.password, perms, editingUserId]);
             } else {
-                await db.execute('INSERT INTO users (username, password, permissions) VALUES ($1, $2, $3)', 
+                await db.execute('INSERT INTO users (username, password, permissions) VALUES ($1, $2, $3)',
                     [userForm.username, userForm.password, perms]);
             }
             setShowUserModal(false);
@@ -212,20 +249,29 @@ export default function Settings({ currentUser }) {
     };
 
     const handleRestore = async (backupName) => {
-        if (isRestoring) return;
         if (!window.confirm("WARNING: Restoring a backup will overwrite your current database. Any changes made since this backup will be permanently lost. Are you sure you want to proceed?")) return;
-        
-        setIsRestoring(true);
         try {
+            setIsRestoring(true);
             const appDir = await appDataDir();
-            const dbPath = await join(appDir, 'inventory.db');
-            const backupPath = await join(appDir, 'backups', backupName);
+            const customDb = await getDbPath();
+            const dbPath = customDb ? customDb : await join(appDir, 'inventory.db');
+            
+            let backupDir;
+            if (customDb) {
+                const dbDir = await dirname(customDb);
+                backupDir = await join(dbDir, 'backups');
+            } else {
+                backupDir = await join(appDir, 'backups');
+            }
+
+            const backupPath = await join(backupDir, backupName);
             await copyFile(backupPath, dbPath);
-            alert("Database restored successfully! The application will now reload.");
+            alert("Database restored successfully! Please restart the app.");
             window.location.reload();
         } catch (err) {
             console.error("Restore failed", err);
-            alert("Failed to restore database.");
+            alert("Failed to restore database");
+        } finally {
             setIsRestoring(false);
         }
     };
@@ -262,14 +308,14 @@ export default function Settings({ currentUser }) {
             const lines = text.split('\n').map(l => l.trim()).filter(l => l);
             const db = await getDb();
             let addedCount = 0;
-            
+
             // Start from 1 to skip header
             for (let i = 1; i < lines.length; i++) {
                 const parts = lines[i].split(',');
                 if (parts.length >= 2) {
                     const type = parts[0].toLowerCase().trim();
                     const value = parts[1].trim();
-                    
+
                     if ((type === 'finish' || type === 'colour') && value) {
                         const exists = await db.select('SELECT id FROM attributes WHERE type = $1 AND value = $2', [type, value]);
                         if (exists.length === 0) {
@@ -291,32 +337,32 @@ export default function Settings({ currentUser }) {
     return (
         <div className="settings-container">
             <div className="settings-card">
-                <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '16px'}}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '16px' }}>
                     <div>
-                        <h3 style={{margin: '0 0 4px 0'}}>Manage Product Parameters</h3>
-                        <p className="subtitle" style={{margin: 0}}>Add or remove standard finishes and colours.</p>
+                        <h3 style={{ margin: '0 0 4px 0' }}>Manage Product Parameters</h3>
+                        <p className="subtitle" style={{ margin: 0 }}>Add or remove standard finishes and colours.</p>
                     </div>
-                    <div style={{display: 'flex', gap: '8px'}}>
-                        <label className="btn-primary" style={{cursor: 'pointer', backgroundColor: 'var(--bg-color)', color: 'var(--text-color)', border: '1px solid var(--border-color)', padding: '6px 12px', fontSize: '0.85rem'}}>
-                            <Upload size={14} style={{marginRight: '6px'}} /> Import CSV
-                            <input type="file" accept=".csv" style={{display: 'none'}} onChange={importCSV} />
+                    <div style={{ display: 'flex', gap: '8px' }}>
+                        <label className="btn-primary" style={{ cursor: 'pointer', backgroundColor: 'var(--bg-color)', color: 'var(--text-color)', border: '1px solid var(--border-color)', padding: '6px 12px', fontSize: '0.85rem' }}>
+                            <Upload size={14} style={{ marginRight: '6px' }} /> Import CSV
+                            <input type="file" accept=".csv" style={{ display: 'none' }} onChange={importCSV} />
                         </label>
-                        <button className="btn-primary" onClick={exportCSV} style={{backgroundColor: 'var(--bg-color)', color: 'var(--text-color)', border: '1px solid var(--border-color)', padding: '6px 12px', fontSize: '0.85rem'}}>
-                            <Download size={14} style={{marginRight: '6px'}} /> Export CSV
+                        <button className="btn-primary" onClick={exportCSV} style={{ backgroundColor: 'var(--bg-color)', color: 'var(--text-color)', border: '1px solid var(--border-color)', padding: '6px 12px', fontSize: '0.85rem' }}>
+                            <Download size={14} style={{ marginRight: '6px' }} /> Export CSV
                         </button>
                     </div>
                 </div>
-                
+
                 <form className="add-form" onSubmit={handleAdd}>
                     <select value={newType} onChange={e => setNewType(e.target.value)} className="form-select">
                         <option value="colour">Colour</option>
                         <option value="finish">Finish</option>
                     </select>
-                    <input 
-                        type="text" 
-                        value={newValue} 
-                        onChange={e => setNewValue(e.target.value)} 
-                        placeholder="e.g. red, matt..." 
+                    <input
+                        type="text"
+                        value={newValue}
+                        onChange={e => setNewValue(e.target.value)}
+                        placeholder="e.g. red, matt..."
                         className="form-input"
                     />
                     <button type="submit" className="btn-primary">
@@ -339,10 +385,10 @@ export default function Settings({ currentUser }) {
             </div>
 
             <div className="settings-card" style={{ marginTop: '24px' }}>
-                <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '16px'}}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '16px' }}>
                     <div>
-                        <h3 style={{margin: '0 0 4px 0'}}>Database Management</h3>
-                        <p className="subtitle" style={{margin: 0}}>The system automatically backs up your database on startup (max 5 versions).</p>
+                        <h3 style={{ margin: '0 0 4px 0' }}>Database Management</h3>
+                        <p className="subtitle" style={{ margin: 0 }}>The system automatically backs up your database on startup (max 10 versions).</p>
                     </div>
                 </div>
 
@@ -366,10 +412,10 @@ export default function Settings({ currentUser }) {
             </div>
 
             <div className="settings-card" style={{ marginTop: '24px' }}>
-                <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '16px'}}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '16px' }}>
                     <div>
-                        <h3 style={{margin: '0 0 4px 0'}}>Database Storage Location</h3>
-                        <p className="subtitle" style={{margin: 0}}>Move your database to a custom folder (e.g. Google Drive) for backup or sharing.</p>
+                        <h3 style={{ margin: '0 0 4px 0' }}>Database Storage Location</h3>
+                        <p className="subtitle" style={{ margin: 0 }}>Move your database to a custom folder (e.g. Google Drive) for backup or sharing.</p>
                     </div>
                 </div>
 
@@ -388,10 +434,10 @@ export default function Settings({ currentUser }) {
             </div>
 
             <div className="settings-card" style={{ marginTop: '24px' }}>
-                <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '16px'}}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '16px' }}>
                     <div>
-                        <h3 style={{margin: '0 0 4px 0'}}>Container Tracking API</h3>
-                        <p className="subtitle" style={{margin: 0}}>Set the maximum number of containers that can be tracked concurrently.</p>
+                        <h3 style={{ margin: '0 0 4px 0' }}>Container Tracking API</h3>
+                        <p className="subtitle" style={{ margin: 0 }}>Set the maximum number of containers that can be tracked concurrently.</p>
                     </div>
                 </div>
 
@@ -400,10 +446,10 @@ export default function Settings({ currentUser }) {
                         <div style={{ fontWeight: 500 }}>Maximum Container Tracking Amount</div>
                     </div>
                     <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-                        <input 
-                            type="number" 
-                            className="form-input" 
-                            style={{ width: '80px', margin: 0 }} 
+                        <input
+                            type="number"
+                            className="form-input"
+                            style={{ width: '80px', margin: 0 }}
                             value={maxContainerTracking}
                             onChange={(e) => setMaxContainerTracking(e.target.value)}
                         />
@@ -418,10 +464,10 @@ export default function Settings({ currentUser }) {
                         <div style={{ fontWeight: 500 }}>findTEU API URL</div>
                     </div>
                     <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-                        <input 
-                            type="text" 
-                            className="form-input" 
-                            style={{ width: '250px', margin: 0 }} 
+                        <input
+                            type="text"
+                            className="form-input"
+                            style={{ width: '250px', margin: 0 }}
                             value={findTeuApi}
                             onChange={(e) => setFindTeuApi(e.target.value)}
                         />
@@ -433,10 +479,10 @@ export default function Settings({ currentUser }) {
                         <div style={{ fontWeight: 500 }}>findTEU API Key</div>
                     </div>
                     <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-                        <input 
-                            type="text" 
-                            className="form-input" 
-                            style={{ width: '250px', margin: 0 }} 
+                        <input
+                            type="text"
+                            className="form-input"
+                            style={{ width: '250px', margin: 0 }}
                             value={findTeuApiKey}
                             onChange={(e) => setFindTeuApiKey(e.target.value)}
                         />
@@ -452,26 +498,27 @@ export default function Settings({ currentUser }) {
 
             {isAdmin && (
                 <div className="settings-card" style={{ marginTop: '24px' }}>
-                    <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '16px'}}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '16px' }}>
                         <div>
-                            <h3 style={{margin: '0 0 4px 0'}}>User Management</h3>
-                            <p className="subtitle" style={{margin: 0}}>Create users and configure page-level read/write permissions.</p>
+                            <h3 style={{ margin: '0 0 4px 0' }}>User Management</h3>
+                            <p className="subtitle" style={{ margin: 0 }}>Create users and configure page-level read/write permissions.</p>
                         </div>
                         <button className="btn-primary" onClick={() => {
                             setEditingUserId(null);
                             setUserForm({
-                                username: '', password: '', 
+                                username: '', password: '',
                                 permissions: {
                                     inventory: { read: false, write: false },
                                     sales: { read: false, write: false },
                                     reports: { read: false, write: false },
                                     settings: { read: false, write: false },
-                                    containers: { read: false, write: false }
+                                    containers: { read: false, write: false },
+                                    admin: false
                                 }
                             });
                             setShowUserModal(true);
-                        }} style={{backgroundColor: 'var(--primary-color)'}}>
-                            <Plus size={14} style={{marginRight: '6px'}} /> Add User
+                        }} style={{ backgroundColor: 'var(--primary-color)' }}>
+                            <Plus size={14} style={{ marginRight: '6px' }} /> Add User
                         </button>
                     </div>
 
@@ -523,7 +570,7 @@ export default function Settings({ currentUser }) {
                                     type="text"
                                     className="form-input"
                                     value={userForm.username}
-                                    onChange={e => setUserForm({...userForm, username: e.target.value})}
+                                    onChange={e => setUserForm({ ...userForm, username: e.target.value })}
                                     disabled={editingUserId === 1}
                                 />
                             </div>
@@ -533,19 +580,34 @@ export default function Settings({ currentUser }) {
                                     type="text"
                                     className="form-input"
                                     value={userForm.password}
-                                    onChange={e => setUserForm({...userForm, password: e.target.value})}
+                                    onChange={e => setUserForm({ ...userForm, password: e.target.value })}
                                 />
                             </div>
 
                             <div style={{ marginBottom: '16px' }}>
                                 <label style={{ display: 'block', marginBottom: '8px', fontWeight: 'bold' }}>Permissions</label>
-                                {Object.keys(userForm.permissions).map(page => (
+                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px', borderBottom: '1px solid #e2e8f0', background: '#f8fafc' }}>
+                                    <div style={{ fontWeight: 'bold' }}>Admin Role</div>
+                                    <label style={{ display: 'flex', alignItems: 'center', gap: '4px', cursor: editingUserId === 1 ? 'not-allowed' : 'pointer', opacity: editingUserId === 1 ? 0.5 : 1 }}>
+                                        <input
+                                            type="checkbox"
+                                            checked={userForm.permissions.admin || false}
+                                            disabled={editingUserId === 1}
+                                            onChange={e => setUserForm(prev => ({
+                                                ...prev,
+                                                permissions: { ...prev.permissions, admin: e.target.checked }
+                                            }))}
+                                        />
+                                        Enable Admin Access
+                                    </label>
+                                </div>
+                                {Object.keys(userForm.permissions).filter(k => k !== 'admin').map(page => (
                                     <div key={page} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px', borderBottom: '1px solid #e2e8f0' }}>
                                         <div style={{ textTransform: 'capitalize', fontWeight: '500' }}>{page}</div>
                                         <div style={{ display: 'flex', gap: '16px' }}>
                                             <label style={{ display: 'flex', alignItems: 'center', gap: '4px', cursor: editingUserId === 1 ? 'not-allowed' : 'pointer', opacity: editingUserId === 1 ? 0.5 : 1 }}>
-                                                <input 
-                                                    type="checkbox" 
+                                                <input
+                                                    type="checkbox"
                                                     checked={userForm.permissions[page].read}
                                                     disabled={editingUserId === 1}
                                                     onChange={e => {
@@ -562,8 +624,8 @@ export default function Settings({ currentUser }) {
                                                 Read
                                             </label>
                                             <label style={{ display: 'flex', alignItems: 'center', gap: '4px', cursor: editingUserId === 1 ? 'not-allowed' : 'pointer', opacity: editingUserId === 1 ? 0.5 : 1 }}>
-                                                <input 
-                                                    type="checkbox" 
+                                                <input
+                                                    type="checkbox"
                                                     checked={userForm.permissions[page].write}
                                                     disabled={editingUserId === 1 || !userForm.permissions[page].read}
                                                     onChange={e => setUserForm(prev => ({

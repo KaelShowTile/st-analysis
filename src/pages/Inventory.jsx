@@ -162,7 +162,10 @@ export default function Inventory({ currentUser }) {
                         if (!isNaN(daysNum)) {
                             const d = new Date();
                             d.setDate(d.getDate() - daysNum);
-                            days = d.toISOString().split('T')[0];
+                            const year = d.getFullYear();
+                            const month = String(d.getMonth() + 1).padStart(2, '0');
+                            const day = String(d.getDate()).padStart(2, '0');
+                            days = `${year}-${month}-${day}`;
                         }
                     }
 
@@ -194,7 +197,9 @@ export default function Inventory({ currentUser }) {
                             rrp=excluded.rrp, cost=excluded.cost, online_name=excluded.online_name, showtile_name=excluded.showtile_name, 
                             pallet_qty=excluded.pallet_qty, box_qty=excluded.box_qty, piece_qty=excluded.piece_qty, 
                             m2_per_box=excluded.m2_per_box, pcs_per_box=excluded.pcs_per_box, box_per_pallet=excluded.box_per_pallet, 
-                            stk=excluded.stk, days=excluded.days, x_inactive=excluded.x_inactive, batch=excluded.batch, 
+                            stk=excluded.stk, 
+                            days = CASE WHEN excluded.days != '' THEN excluded.days ELSE inventory.days END, 
+                            x_inactive=excluded.x_inactive, batch=excluded.batch, 
                             location=excluded.location, backorder=excluded.backorder, backorder_amount=excluded.backorder_amount
                     `, [sku, stock_no, sales_desc, supplier, available, holding, so_qty, total_qty, rrp, cost, online_name, showtile, pallet_qty, box_qty, piece_qty, m2_per_box, pcs_per_box, box_per_pallet, stk, days, x_inactive, batch, location, extractedName, extractedFinish, extractedSize, extractedColour, backorder, backorder_amount]);
                 }
@@ -274,7 +279,7 @@ export default function Inventory({ currentUser }) {
     let filteredData = data.filter(item => {
         const term = searchTerm.toLowerCase();
         return (item.sku && String(item.sku).toLowerCase().includes(term)) ||
-               (item.sales_description && item.sales_description.toLowerCase().includes(term));
+            (item.sales_description && item.sales_description.toLowerCase().includes(term));
     });
 
     if (sortConfig.key) {
@@ -312,7 +317,7 @@ export default function Inventory({ currentUser }) {
                         className="btn-upload"
                         onClick={handleClearAll}
                         disabled={loading || !canWrite}
-                        style={{ 
+                        style={{
                             background: canWrite ? 'linear-gradient(135deg, #ef4444 0%, #dc2626 100%)' : '#d1d5db',
                             boxShadow: canWrite ? '0 4px 6px rgba(239, 68, 68, 0.25)' : 'none',
                             cursor: canWrite ? 'pointer' : 'not-allowed',
