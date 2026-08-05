@@ -1,9 +1,9 @@
 import { useState, useEffect } from 'react';
 import { getDb, getDbPath, getSetting, setSetting, closeDb } from '../db/Database';
-import { save } from '@tauri-apps/plugin-dialog';
+import { save, open } from '@tauri-apps/plugin-dialog';
 import { writeTextFile } from '@tauri-apps/plugin-fs';
 import './Settings.css';
-import { Trash2, Plus, Download, Upload, DatabaseBackup, RotateCcw, FolderOpen, Edit3, X, UserCog } from 'lucide-react';
+import { Trash2, Plus, Download, Upload, DatabaseBackup, RotateCcw, FolderOpen, Edit3, X, UserCog, Save } from 'lucide-react';
 import { appDataDir, join, dirname } from '@tauri-apps/api/path';
 import { readDir, copyFile, exists, mkdir } from '@tauri-apps/plugin-fs';
 import { load } from '@tauri-apps/plugin-store';
@@ -18,6 +18,8 @@ export default function Settings({ currentUser }) {
     const [maxContainerTracking, setMaxContainerTracking] = useState(50);
     const [findTeuApi, setFindTeuApi] = useState('https://findteu.showtile-apis.workers.dev/api');
     const [findTeuApiKey, setFindTeuApiKey] = useState('TAURI_API_KEY');
+    const [printColsContainer, setPrintColsContainer] = useState(['cntr_no', 'hbl_no', 'shipper', 'invoice_no', 'payment', 'doc', 'contents', 'tracking', 'pol', 'etd', 'eta', 'original_eta', 'delivery', 'info', 'last_free_dtn']);
+    const [printColsShipment, setPrintColsShipment] = useState(['invoice_no', 'hbl_no', 'shipper_name', 'est_date', 'cntr_no', 'products', 'note', 'deposit', 'balance']);
 
     const isAdmin = currentUser?.permissions?.admin === true;
     const [users, setUsers] = useState([]);
@@ -30,7 +32,11 @@ export default function Settings({ currentUser }) {
             sales: { read: false, write: false },
             reports: { read: false, write: false },
             settings: { read: false, write: false },
-            containers: { read: false, write: false }
+            containerDashboard: { read: false, write: false },
+            shipmentOrders: { read: false, write: false },
+            containerList: { read: false, write: false },
+            shippers: { read: false, write: false },
+            oceanShippers: { read: false, write: false }
         }
     });
 
@@ -66,6 +72,12 @@ export default function Settings({ currentUser }) {
         await setSetting('findteu_api_url', findTeuApi);
         await setSetting('findteu_api_key', findTeuApiKey);
         alert("findTEU API settings saved successfully.");
+    };
+
+    const handleSavePrintSettings = async () => {
+        await setSetting('print_cols_container', JSON.stringify(printColsContainer));
+        await setSetting('print_cols_shipment', JSON.stringify(printColsShipment));
+        alert("Export & Print settings saved successfully.");
     };
 
     const handleMoveDatabase = async () => {
@@ -128,6 +140,28 @@ export default function Settings({ currentUser }) {
         }
     };
 
+    const handleConnectDatabase = async () => {
+        try {
+            const newPath = await open({
+                filters: [{ name: 'SQLite Database', extensions: ['db'] }],
+                defaultPath: 'inventory.db'
+            });
+
+            if (newPath) {
+                // Save new path to Store
+                const store = await load('settings.json', { autoSave: false });
+                await store.set('customDbPath', newPath);
+                await store.save();
+
+                alert("Successfully connected to the database! The application will now restart.");
+                window.location.reload();
+            }
+        } catch (err) {
+            console.error("Failed to connect database:", err);
+            alert("Failed to connect database. Please check permissions and try again.");
+        }
+    };
+
     const loadAttributes = async () => {
         const db = await getDb();
         const results = await db.select('SELECT * FROM attributes ORDER BY type, value');
@@ -181,6 +215,15 @@ export default function Settings({ currentUser }) {
         const key = await getSetting('findteu_api_key', 'TAURI_API_KEY');
         setFindTeuApi(url);
         setFindTeuApiKey(key);
+
+        const pcStr = await getSetting('print_cols_container', '');
+        if (pcStr) {
+            try { setPrintColsContainer(JSON.parse(pcStr)); } catch(e) {}
+        }
+        const psStr = await getSetting('print_cols_shipment', '');
+        if (psStr) {
+            try { setPrintColsShipment(JSON.parse(psStr)); } catch(e) {}
+        }
     };
 
     useEffect(() => {
@@ -255,7 +298,7 @@ export default function Settings({ currentUser }) {
             const appDir = await appDataDir();
             const customDb = await getDbPath();
             const dbPath = customDb ? customDb : await join(appDir, 'inventory.db');
-            
+
             let backupDir;
             if (customDb) {
                 const dbDir = await dirname(customDb);
@@ -370,7 +413,7 @@ export default function Settings({ currentUser }) {
                     </button>
                 </form>
 
-                <div className="attributes-list">
+                <div className="attributes-list product-parameters-list">
                     {attributes.map(attr => (
                         <div key={attr.id} className="attribute-item">
                             <span className={`badge ${attr.type}`}>{attr.type}</span>
@@ -427,9 +470,14 @@ export default function Settings({ currentUser }) {
                             <div style={{ fontSize: '0.8rem', color: '#64748b', overflow: 'hidden', textOverflow: 'ellipsis' }} title={currentDbPath}>{currentDbPath}</div>
                         </div>
                     </div>
-                    <button onClick={handleMoveDatabase} className="btn-primary" style={{ flexShrink: 0, marginLeft: '16px' }}>
-                        Move Database
-                    </button>
+                    <div style={{ display: 'flex', gap: '8px', flexShrink: 0, marginLeft: '16px' }}>
+                        <button onClick={handleConnectDatabase} className="btn-secondary" style={{ padding: '0 15px' }}>
+                            Re-Connect
+                        </button>
+                        <button onClick={handleMoveDatabase} className="btn-primary">
+                            Move
+                        </button>
+                    </div>
                 </div>
             </div>
 
@@ -459,40 +507,83 @@ export default function Settings({ currentUser }) {
                     </div>
                 </div>
 
-                <div className="attribute-item" style={{ display: 'flex', justifyContent: 'space-between', padding: '12px 16px', background: 'var(--surface-color)', borderRadius: '6px', border: '1px solid var(--border-color)', alignItems: 'center', marginTop: '12px' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flex: 1, overflow: 'hidden' }}>
-                        <div style={{ fontWeight: 500 }}>findTEU API URL</div>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '16px', marginTop: '12px' }}>
+                        <div>
+                            <label className="form-label" style={{ fontWeight: 'bold' }}>FindTEU API URL</label>
+                            <input
+                                type="text"
+                                className="form-input"
+                                value={findTeuApi}
+                                onChange={e => setFindTeuApi(e.target.value)}
+                                placeholder="https://..."
+                            />
+                        </div>
+                        <div>
+                            <label className="form-label" style={{ fontWeight: 'bold' }}>API Key</label>
+                            <input
+                                type="text"
+                                className="form-input"
+                                value={findTeuApiKey}
+                                onChange={e => setFindTeuApiKey(e.target.value)}
+                            />
+                        </div>
                     </div>
-                    <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-                        <input
-                            type="text"
-                            className="form-input"
-                            style={{ width: '250px', margin: 0 }}
-                            value={findTeuApi}
-                            onChange={(e) => setFindTeuApi(e.target.value)}
-                        />
-                    </div>
-                </div>
-
-                <div className="attribute-item" style={{ display: 'flex', justifyContent: 'space-between', padding: '12px 16px', background: 'var(--surface-color)', borderRadius: '6px', border: '1px solid var(--border-color)', alignItems: 'center', marginTop: '12px' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flex: 1, overflow: 'hidden' }}>
-                        <div style={{ fontWeight: 500 }}>findTEU API Key</div>
-                    </div>
-                    <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-                        <input
-                            type="text"
-                            className="form-input"
-                            style={{ width: '250px', margin: 0 }}
-                            value={findTeuApiKey}
-                            onChange={(e) => setFindTeuApiKey(e.target.value)}
-                        />
-                    </div>
-                </div>
 
                 <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '12px' }}>
                     <button onClick={handleSaveFindTeuSettings} className="btn-primary">
                         Save API Settings
                     </button>
+                </div>
+            </div>
+
+            <div className="settings-card" style={{ marginTop: '24px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '16px' }}>
+                    <div>
+                        <h3 style={{ margin: '0 0 4px 0' }}>Export & Print Columns</h3>
+                        <p className="subtitle" style={{ margin: 0 }}>Configure which columns appear in the print and PDF exports.</p>
+                    </div>
+                    <button className="btn-primary" onClick={handleSavePrintSettings} style={{ padding: '6px 12px', fontSize: '0.85rem' }}>
+                        <Save size={14} style={{ marginRight: '6px' }} /> Save Print Settings
+                    </button>
+                </div>
+                
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '32px' }}>
+                    <div>
+                        <h4 style={{ marginBottom: '12px' }}>Container List</h4>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', maxHeight: '250px', overflowY: 'auto', padding: '12px', border: '1px solid var(--border-color)', borderRadius: '6px', background: 'var(--surface-color)' }}>
+                            {['cntr_no', 'hbl_no', 'shipper', 'invoice_no', 'payment', 'doc', 'contents', 'tracking', 'pol', 'etd', 'eta', 'original_eta', 'delivery', 'info', 'last_free_dtn', 'ocean_shipper'].map(col => (
+                                <label key={col} style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', textTransform: 'capitalize' }}>
+                                    <input 
+                                        type="checkbox" 
+                                        checked={printColsContainer.includes(col)}
+                                        onChange={(e) => {
+                                            if (e.target.checked) setPrintColsContainer([...printColsContainer, col]);
+                                            else setPrintColsContainer(printColsContainer.filter(c => c !== col));
+                                        }}
+                                    />
+                                    {col.replace(/_/g, ' ')}
+                                </label>
+                            ))}
+                        </div>
+                    </div>
+                    <div>
+                        <h4 style={{ marginBottom: '12px' }}>Shipment Orders</h4>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', maxHeight: '250px', overflowY: 'auto', padding: '12px', border: '1px solid var(--border-color)', borderRadius: '6px', background: 'var(--surface-color)' }}>
+                            {['invoice_no', 'hbl_no', 'shipper_name', 'est_date', 'cntr_no', 'products', 'note', 'deposit', 'balance'].map(col => (
+                                <label key={col} style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', textTransform: 'capitalize' }}>
+                                    <input 
+                                        type="checkbox" 
+                                        checked={printColsShipment.includes(col)}
+                                        onChange={(e) => {
+                                            if (e.target.checked) setPrintColsShipment([...printColsShipment, col]);
+                                            else setPrintColsShipment(printColsShipment.filter(c => c !== col));
+                                        }}
+                                    />
+                                    {col.replace(/_/g, ' ')}
+                                </label>
+                            ))}
+                        </div>
+                    </div>
                 </div>
             </div>
 
@@ -512,7 +603,10 @@ export default function Settings({ currentUser }) {
                                     sales: { read: false, write: false },
                                     reports: { read: false, write: false },
                                     settings: { read: false, write: false },
-                                    containers: { read: false, write: false },
+                                    containerDashboard: { read: false, write: false },
+                                    shipmentOrders: { read: false, write: false },
+                                    containerList: { read: false, write: false },
+                                    shippers: { read: false, write: false },
                                     admin: false
                                 }
                             });
@@ -540,7 +634,19 @@ export default function Settings({ currentUser }) {
                                         setUserForm({
                                             username: u.username,
                                             password: u.password,
-                                            permissions: u.permissions
+                                            permissions: {
+                                                inventory: { read: false, write: false },
+                                                sales: { read: false, write: false },
+                                                reports: { read: false, write: false },
+                                                settings: { read: false, write: false },
+                                                containerDashboard: { read: false, write: false },
+                                                shipmentOrders: { read: false, write: false },
+                                                containerList: { read: false, write: false },
+                                                shippers: { read: false, write: false },
+                                                oceanShippers: { read: false, write: false },
+                                                admin: false,
+                                                ...u.permissions
+                                            }
                                         });
                                         setShowUserModal(true);
                                     }} className="btn-icon">
@@ -603,7 +709,9 @@ export default function Settings({ currentUser }) {
                                 </div>
                                 {Object.keys(userForm.permissions).filter(k => k !== 'admin').map(page => (
                                     <div key={page} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px', borderBottom: '1px solid #e2e8f0' }}>
-                                        <div style={{ textTransform: 'capitalize', fontWeight: '500' }}>{page}</div>
+                                        <div style={{ textTransform: 'capitalize', fontWeight: '500' }}>
+                                            {page.replace(/([A-Z])/g, ' $1').replace(/^./, str => str.toUpperCase())}
+                                        </div>
                                         <div style={{ display: 'flex', gap: '16px' }}>
                                             <label style={{ display: 'flex', alignItems: 'center', gap: '4px', cursor: editingUserId === 1 ? 'not-allowed' : 'pointer', opacity: editingUserId === 1 ? 0.5 : 1 }}>
                                                 <input

@@ -7,7 +7,7 @@ import { DragDropContext, Droppable, Draggable } from '@hello-pangea/dnd';
 import { toDateInt, getCellCalculations } from '../utils/calculations';
 import './Reports.css';
 
-export default function Reports({ currentUser, initialReportId }) {
+export default function Reports({ currentUser, initialReportId, isActive }) {
     const [reports, setReports] = useState([]);
     const [activeReport, setActiveReport] = useState(null);
     const [inventoryMap, setInventoryMap] = useState({});
@@ -73,8 +73,10 @@ export default function Reports({ currentUser, initialReportId }) {
     };
 
     useEffect(() => {
-        loadCoreData();
-    }, []);
+        if (isActive !== false) {
+            loadCoreData();
+        }
+    }, [isActive]);
 
     useEffect(() => {
         if (initialReportId) {
@@ -439,9 +441,71 @@ export default function Reports({ currentUser, initialReportId }) {
         return newData;
     };
 
+    const updateReportData = (reportObj, invList) => {
+        if (!reportObj.data || !reportObj.data.finishes) return generateReportData(reportObj, invList);
+
+        let matches = [];
+        const isMultiProduct = reportObj.data.productNames && reportObj.data.productNames.length > 1;
+
+        if (reportObj.data.productNames && reportObj.data.productNames.length > 0) {
+            const pNames = reportObj.data.productNames.map(n => n.toLowerCase());
+            matches = invList.filter(i => pNames.includes((i.extracted_name || '').toLowerCase()));
+        } else {
+            const name = (reportObj.name || '').toLowerCase();
+            matches = invList.filter(i => (i.extracted_name || '').toLowerCase() === name);
+        }
+
+        const grouped = {};
+        matches.forEach(item => {
+            const pName = item.extracted_name;
+            const fName = item.extracted_finish;
+            const sNameRaw = item.extracted_size;
+            const cName = item.extracted_colour;
+
+            if (!fName || !sNameRaw || !cName) return;
+
+            let sName = sNameRaw;
+            if (isMultiProduct && pName) {
+                sName = `${pName} - ${sNameRaw}`;
+            }
+
+            const key = `${fName.toLowerCase()}|${sName.toLowerCase()}|${cName.toLowerCase()}`;
+            if (!grouped[key]) grouped[key] = [];
+            grouped[key].push(item);
+        });
+
+        const newData = JSON.parse(JSON.stringify(reportObj.data));
+
+        if (newData.finishes) {
+            newData.finishes.forEach(finish => {
+                if (!finish.sizes) return;
+                finish.sizes.forEach(sz => {
+                    if (!finish.colours) return;
+                    finish.colours.forEach(c => {
+                        if (!sz.cells) sz.cells = {};
+                        if (!sz.cells[c]) sz.cells[c] = { skus: [], order: 0 };
+
+                        const items = grouped[`${finish.name.toLowerCase()}|${sz.name.toLowerCase()}|${c.toLowerCase()}`] || [];
+                        const normals = items.filter(i => i.backorder !== 1);
+
+                        normals.sort((a, b) => {
+                            const dA = a.days || '';
+                            const dB = b.days || '';
+                            return dB.localeCompare(dA);
+                        });
+
+                        sz.cells[c].skus = normals.slice(0, 4).map(i => i.sku);
+                    });
+                });
+            });
+        }
+
+        return newData;
+    };
+
     const updateAllReports = async () => {
         if (!canWrite) return;
-        if (!window.confirm("This will overwrite all tables and Order inputs for ALL reports in the database based on the current inventory. This action cannot be undone. Continue?")) return;
+        if (!window.confirm("This will update SKUs and backorders for ALL reports without modifying your custom table structures. Continue?")) return;
         setSavingReport(true);
         try {
             const db = await getDb();
@@ -449,7 +513,7 @@ export default function Reports({ currentUser, initialReportId }) {
 
             for (const r of allReports) {
                 const parsedReport = { ...r, data: JSON.parse(r.data) };
-                const newData = generateReportData(parsedReport, inventoryList);
+                const newData = updateReportData(parsedReport, inventoryList);
                 const jsonStr = JSON.stringify(newData);
                 await db.execute('UPDATE reports SET data = $1 WHERE id = $2', [jsonStr, r.id]);
 
@@ -655,6 +719,25 @@ export default function Reports({ currentUser, initialReportId }) {
             alert(`Auto Generate Complete!`);
         } catch (err) {
             console.error("Save failed during auto generate", err);
+        }
+    };
+    const autoUpdate = async () => {
+        if (!canWrite) return;
+        if (!window.confirm("This will update SKUs and backorders for this report without modifying your custom table structures. Continue?")) return;
+
+        const newData = updateReportData(activeReport, inventoryList);
+
+        setActiveReport({ ...activeReport, data: newData });
+        setActiveFinishIdx(0);
+
+        try {
+            const db = await getDb();
+            const jsonStr = JSON.stringify(newData);
+            await db.execute('UPDATE reports SET end_date = $1, start_date = $2, data = $3 WHERE id = $4',
+                [activeReport.end_date, activeReport.start_date, jsonStr, activeReport.id]);
+            alert(`Auto Update Complete!`);
+        } catch (err) {
+            console.error("Save failed during auto update", err);
         }
     };
 
@@ -863,19 +946,24 @@ export default function Reports({ currentUser, initialReportId }) {
                                 <span className="status-text" style={{ marginRight: '10px' }}>{savingReport ? 'Saving...' : ''}</span>
                                 <div style={{ display: 'flex', gap: '8px' }}>
                                     <button className="btn-upload" onClick={printReport} style={{ background: '#f8fafc', color: '#1e293b', border: '1px solid #cbd5e1' }}>
-                                        <Printer size={16} /> Print Report
+                                        <Printer size={16} /> Print
                                     </button>
                                     <button className="btn-upload" onClick={exportReportHTML} style={{ background: '#f8fafc', color: '#1e293b', border: '1px solid #cbd5e1' }}>
-                                        <Download size={16} /> Export HTML
+                                        <Download size={16} /> Export
                                     </button>
                                     {canWrite && (
-                                        <button className="btn-upload" onClick={autoGenerate} style={{ background: 'var(--bg-color)', color: 'var(--text-color)', border: '1px solid #cbd5e1' }}>
-                                            <Sparkles size={16} /> Auto Generate
-                                        </button>
+                                        <div style={{ display: 'flex', gap: '8px' }}>
+                                            <button className="btn-upload" onClick={autoUpdate} style={{ background: 'var(--bg-color)', color: 'var(--text-color)', border: '1px solid #cbd5e1' }}>
+                                                <RefreshCw size={16} /> Update
+                                            </button>
+                                            <button className="btn-upload" onClick={autoGenerate} style={{ background: 'var(--bg-color)', color: 'var(--text-color)', border: '1px solid #cbd5e1' }}>
+                                                <Sparkles size={16} /> Generate
+                                            </button>
+                                        </div>
                                     )}
                                     {canWrite && (
                                         <button className="btn-upload" onClick={saveReportData} disabled={savingReport}>
-                                            <Save size={16} /> {savingReport ? 'Saving...' : 'Save Report'}
+                                            <Save size={16} /> {savingReport ? 'Saving...' : 'Save'}
                                         </button>
                                     )}
                                 </div>

@@ -1,11 +1,11 @@
 import { useState, useEffect } from 'react';
-import { getDb } from '../db/Database';
+import { getDb, getSetting } from '../db/Database';
 import { Plus, Edit, Trash2, Search, Check, ChevronUp, ChevronDown, ListFilter, XCircle, Printer, Download } from 'lucide-react';
 import { confirm, save } from '@tauri-apps/plugin-dialog';
 import { writeTextFile } from '@tauri-apps/plugin-fs';
 import './Containers.css';
 
-export default function ShipmentOrders({ currentUser, initialEditId, onClearEdit }) {
+export default function ShipmentOrders({ currentUser, initialEditId, onClearEdit, isActive }) {
     const [orders, setOrders] = useState([]);
     const [filteredOrders, setFilteredOrders] = useState([]);
     const [shippers, setShippers] = useState([]);
@@ -40,11 +40,13 @@ export default function ShipmentOrders({ currentUser, initialEditId, onClearEdit
     const [sortConfig, setSortConfig] = useState({ key: '', direction: '' });
     const [filterStatus, setFilterStatus] = useState('');
 
-    const canWrite = currentUser?.permissions?.containers?.write !== false;
+    const canWrite = currentUser?.permissions?.shipmentOrders?.write !== false;
 
     useEffect(() => {
-        loadInitialData();
-    }, []);
+        if (isActive !== false) {
+            loadInitialData();
+        }
+    }, [isActive]);
 
     useEffect(() => {
         applyFilters();
@@ -323,32 +325,42 @@ export default function ShipmentOrders({ currentUser, initialEditId, onClearEdit
     });
 
     const exportHTML = async (print = false) => {
+        let printColsStr = '';
+        try { printColsStr = await getSetting('print_cols_shipment', ''); } catch (e) { }
+        let printCols = ['invoice_no', 'hbl_no', 'shipper_name', 'est_date', 'cntr_no', 'products', 'note', 'deposit', 'balance'];
+        if (printColsStr) {
+            try { printCols = JSON.parse(printColsStr); } catch (e) { }
+        }
+
+        const colLabels = {
+            invoice_no: 'Invoice No.', hbl_no: 'HBL No.', shipper_name: 'Shipper', est_date: 'Est. Date',
+            cntr_no: 'Container No.', products: 'Products', note: 'Note', deposit: 'Deposit', balance: 'Balance'
+        };
+
         let htmlRows = '';
         sortedOrders.forEach(order => {
             const s = shippers.find(x => x.shipper_id == order.shipper);
             const dRate = s ? (s.deposit || 0) : 0;
             const bRate = 100 - dRate;
 
-            let paymentStr = `Deposit (${dRate}%): ${order.deposit != null ? 'Paid' : 'Pending'}`;
-            if (dRate < 100) {
-                paymentStr += `<br/>Balance (${bRate}%): ${order.balance != null ? 'Paid' : 'Pending'}`;
+            htmlRows += `<tr>`;
+            for (const col of printCols) {
+                if (col === 'shipper_name') {
+                    htmlRows += `<td>${getShipperName(order.shipper)}</td>`;
+                } else if (col === 'products') {
+                    htmlRows += `<td>${getProductNames(order.products).join('<br/>')}</td>`;
+                } else if (col === 'deposit') {
+                    htmlRows += `<td>${dRate}%: ${order.deposit != null ? 'Paid' : 'Pending'}${order.payment_date && order.deposit != null ? `<br/>Date: ${order.payment_date}` : ''}</td>`;
+                } else if (col === 'balance') {
+                    htmlRows += `<td>${bRate}%: ${order.balance != null ? 'Paid' : 'Pending'}</td>`;
+                } else {
+                    htmlRows += `<td>${order[col] || ''}</td>`;
+                }
             }
-            if (order.payment_date) {
-                paymentStr += `<br/>Date: ${order.payment_date}`;
-            }
-
-            const productsStr = getProductNames(order.products).join('<br/>');
-
-            htmlRows += `<tr>
-                <td>${(order.status || 'open').toUpperCase()}</td>
-                <td>${getShipperName(order.shipper)}</td>
-                <td>${order.invoice_no || ''}</td>
-                <td>${paymentStr}</td>
-                <td>${productsStr}</td>
-                <td>${order.est_date || ''}</td>
-                <td>${order.note || ''}</td>
-            </tr>`;
+            htmlRows += `</tr>`;
         });
+
+        const headerRow = printCols.map(col => `<th>${colLabels[col] || col}</th>`).join('');
 
         const html = `<!DOCTYPE html>
 <html>
@@ -372,13 +384,7 @@ export default function ShipmentOrders({ currentUser, initialEditId, onClearEdit
     <table class="report-table">
         <thead>
             <tr>
-                <th>Status</th>
-                <th>Shipper</th>
-                <th>Invoice No.</th>
-                <th>Payment</th>
-                <th>Products</th>
-                <th>Est. Date</th>
-                <th>Note</th>
+                ${headerRow}
             </tr>
         </thead>
         <tbody>
@@ -426,7 +432,7 @@ export default function ShipmentOrders({ currentUser, initialEditId, onClearEdit
         <div style={{ display: 'flex', width: '100%', height: '100%', backgroundColor: '#f8fafc' }}>
 
             {/* Left Pane - Table */}
-            <div style={{ flex: 1, display: 'flex', flexDirection: 'column', borderRight: '1px solid #e2e8f0', overflow: 'hidden' }}>
+            <div style={{ flex: 1, display: 'flex', flexDirection: 'column', borderRight: '1px solid #e2e8f0', overflow: 'hidden', width: 'calc(100vw - 400px)' }}>
                 <div style={{ padding: '16px 24px', backgroundColor: 'white' }}>
                     <div style={{ display: 'flex', alignItems: 'center', marginBottom: '16px', justifyContent: 'space-between' }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
@@ -517,7 +523,7 @@ export default function ShipmentOrders({ currentUser, initialEditId, onClearEdit
                                         {visibleColumns.includes('shipper') && <th className='has-sort-icon' style={{ width: '150px', minWidth: '150px', cursor: 'pointer' }} onClick={() => handleSort('shipper')}><SortIcon columnKey="shipper" /> Shipper</th>}
                                         {visibleColumns.includes('invoice_no') && <th className='has-sort-icon' style={{ width: '120px', minWidth: '120px', cursor: 'pointer' }} onClick={() => handleSort('invoice_no')}><SortIcon columnKey="invoice_no" /> Invoice No.</th>}
                                         {visibleColumns.includes('payment') && <th style={{ width: '230px', minWidth: '230px' }}>Payment</th>}
-                                        {visibleColumns.includes('products') && <th style={{ width: '300px', minWidth: '300px' }}>Products</th>}
+                                        {visibleColumns.includes('products') && <th style={{ width: '250px', minWidth: '250px' }}>Products</th>}
                                         {visibleColumns.includes('est_date') && <th className='has-sort-icon' style={{ width: '120px', minWidth: '120px', cursor: 'pointer' }} onClick={() => handleSort('est_date')}><SortIcon columnKey="est_date" /> Est. Date</th>}
                                         {visibleColumns.includes('note') && <th style={{ width: '200px', minWidth: '200px' }}>Note</th>}
                                     </tr>

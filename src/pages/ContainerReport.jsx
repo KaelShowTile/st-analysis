@@ -2,9 +2,10 @@ import { useState, useEffect } from 'react';
 import { getDb } from '../db/Database';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Cell } from 'recharts';
 import ContainerDetailModal from './ContainerDetailModal';
+import ContainerModal from './ContainerModal';
 import './Containers.css';
 
-export default function ContainerReport({ currentUser, onNavigateToShipment }) {
+export default function ContainerReport({ currentUser, onNavigateToShipment, isActive }) {
     const [chartData, setChartData] = useState({ monthlyArrivals: [], originStats: [], shipperStats: [] });
     const [lists, setLists] = useState({
         delayed: [],
@@ -27,11 +28,14 @@ export default function ContainerReport({ currentUser, onNavigateToShipment }) {
     const [allContainers, setAllContainers] = useState([]);
 
     const [detailModalOpen, setDetailModalOpen] = useState(false);
+    const [editModalOpen, setEditModalOpen] = useState(false);
     const [detailRecord, setDetailRecord] = useState(null);
 
     useEffect(() => {
-        loadData();
-    }, []);
+        if (isActive !== false) {
+            loadData();
+        }
+    }, [isActive]);
 
     useEffect(() => {
         if (allContainers.length > 0) {
@@ -196,16 +200,18 @@ export default function ContainerReport({ currentUser, onNavigateToShipment }) {
 
         const delayed = [];
         const inTransit = [];
-        const arrivedThisMonth = [];
         const unpaid = [];
         const debugLogs = [];
 
-        containers.forEach(c => {
-            // 1. Arrived This Month
-            if (c.delivery && c.delivery >= firstDayOfMonth && c.delivery <= todayStr) {
-                arrivedThisMonth.push(c);
-            }
+        const pendingDocs = containers
+            .filter(c => c.doc !== 'true' && c.doc !== true)
+            .sort((a, b) => {
+                const dateA = a.etd ? new Date(a.etd) : new Date(0);
+                const dateB = b.etd ? new Date(b.etd) : new Date(0);
+                return dateA - dateB;
+            });
 
+        containers.forEach(c => {
             // 2. Delayed (ETA and Original ETA not equal, AND no delivery date)
             if (c.eta && c.original_eta && c.eta !== c.original_eta) {
                 delayed.push(c);
@@ -284,13 +290,12 @@ export default function ContainerReport({ currentUser, onNavigateToShipment }) {
         });
 
         // Sort lists (newest first based on ID for simplicity, or delivery/eta if wanted. ID is fine)
-        arrivedThisMonth.sort((a, b) => b.container_id - a.container_id);
         delayed.sort((a, b) => b.container_id - a.container_id);
         inTransit.sort((a, b) => b.container_id - a.container_id);
         unpaid.sort((a, b) => b.container_id - a.container_id);
 
         setLists({
-            arrivedThisMonth,
+            pendingDocs,
             delayed,
             inTransit,
             unpaid,
@@ -298,7 +303,7 @@ export default function ContainerReport({ currentUser, onNavigateToShipment }) {
         });
     };
 
-    const handleRowClick = (record) => {
+    const handleRowClick = (record, title) => {
         if (!record.container_id) {
             if (record.shipment_id && onNavigateToShipment) {
                 onNavigateToShipment(record.shipment_id);
@@ -306,7 +311,11 @@ export default function ContainerReport({ currentUser, onNavigateToShipment }) {
             return;
         }
         setDetailRecord(record);
-        setDetailModalOpen(true);
+        if (title === 'Docs Not Ready') {
+            setEditModalOpen(true);
+        } else {
+            setDetailModalOpen(true);
+        }
     };
 
     if (loading) {
@@ -332,7 +341,7 @@ export default function ContainerReport({ currentUser, onNavigateToShipment }) {
                             {items.map((item, idx) => (
                                 <tr
                                     key={(item.container_id || item.shipment_id) + '_' + idx}
-                                    onClick={() => handleRowClick(item)}
+                                    onClick={() => handleRowClick(item, title)}
                                     style={{ cursor: 'pointer' }}
                                     onMouseEnter={(e) => e.currentTarget.style.backgroundColor = '#f1f5f9'}
                                     onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
@@ -358,13 +367,13 @@ export default function ContainerReport({ currentUser, onNavigateToShipment }) {
                 )}
 
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: '24px' }}>
-                    {renderList('Arrived Containers This Month', ['Container No', 'Arrival Date'], lists.arrivedThisMonth, (item) => (
+                    {renderList('Docs Not Ready', ['Container No', 'ETD Date'], lists.pendingDocs, (item) => (
                         <>
                             <td style={{ width: '50%', padding: '8px' }}>
                                 <div style={{ fontSize: '0.85rem', fontWeight: 500, color: '#1e293b' }}>{item.cntr_no || 'Unknown'}</div>
                             </td>
                             <td style={{ width: '50%', padding: '8px' }}>
-                                <div style={{ fontSize: '0.85rem', color: '#10b981', fontWeight: 500 }}>{item.delivery}</div>
+                                <div style={{ fontSize: '0.85rem', color: '#ef4444', fontWeight: 500 }}>{item.etd || 'Unknown'}</div>
                             </td>
                         </>
                     ))}
@@ -504,6 +513,18 @@ export default function ContainerReport({ currentUser, onNavigateToShipment }) {
                     shippersMap={shippersMap}
                     shipmentsMap={shipmentsMap}
                     onNavigateToShipment={onNavigateToShipment}
+                />
+            )}
+
+            {editModalOpen && (
+                <ContainerModal
+                    currentUser={currentUser}
+                    record={detailRecord}
+                    shippers={Object.values(shippersMap)}
+                    onClose={() => {
+                        setEditModalOpen(false);
+                        loadData();
+                    }}
                 />
             )}
         </div>

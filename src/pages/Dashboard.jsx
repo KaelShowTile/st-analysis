@@ -4,7 +4,7 @@ import { getCellCalculations } from '../utils/calculations';
 import { Package, AlertTriangle } from 'lucide-react';
 import './Dashboard.css';
 
-export default function Dashboard({ currentUser, onNavigate }) {
+export default function Dashboard({ currentUser, onNavigate, isActive }) {
     const [lowStockItems, setLowStockItems] = useState([]);
     const [loading, setLoading] = useState(true);
 
@@ -93,8 +93,10 @@ export default function Dashboard({ currentUser, onNavigate }) {
     };
 
     useEffect(() => {
-        loadData();
-    }, []);
+        if (isActive !== false) {
+            loadData();
+        }
+    }, [isActive]);
 
     const handleIgnoreReport = async (reportId) => {
         if (!window.confirm("Are you sure you want to ignore low stock alerts for this report?")) return;

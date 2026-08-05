@@ -36,7 +36,7 @@ const MultiSelectDropdown = ({ label, options, selected, onChange }) => {
     );
 };
 
-export default function ContainerList({ currentUser, onNavigateToShipment }) {
+export default function ContainerList({ currentUser, onNavigateToShipment, isActive }) {
     const [years, setYears] = useState([]);
     const [activeYear, setActiveYear] = useState(new Date().getFullYear());
     const [records, setRecords] = useState([]);
@@ -61,19 +61,21 @@ export default function ContainerList({ currentUser, onNavigateToShipment }) {
     const [filterEtaTo, setFilterEtaTo] = useState('');
     const [searchContent, setSearchContent] = useState('');
 
-    const [sortConfig, setSortConfig] = useState({ key: null, direction: 'asc' });
+    const [sortConfig, setSortConfig] = useState({ key: 'hbl_no', direction: 'asc' });
     const defaultCols = ['cntr_no', 'hbl_no', 'shipper', 'invoice_no', 'payment', 'doc', 'contents', 'tracking', 'pol', 'etd', 'eta', 'original_eta', 'delivery', 'info', 'last_free_dtn'];
     const [visibleColumns, setVisibleColumns] = useState(defaultCols);
     const [showColumnModal, setShowColumnModal] = useState(false);
 
-    const canWrite = currentUser?.permissions?.containers?.write;
+    const canWrite = currentUser?.permissions?.containerList?.write;
 
     useEffect(() => {
-        loadSidebar();
-        loadMappings();
-        loadQuota();
-        syncTrackedContainers();
-    }, []);
+        if (isActive !== false) {
+            loadSidebar();
+            loadMappings();
+            loadQuota();
+            syncTrackedContainers();
+        }
+    }, [isActive]);
 
     useEffect(() => {
         if (activeYear) {
@@ -220,13 +222,6 @@ export default function ContainerList({ currentUser, onNavigateToShipment }) {
                             }
                             await db.execute(query, params);
 
-                            if (subId && (finalStatus.toLowerCase() === 'delivered' || finalStatus.toLowerCase() === 'empty returned')) {
-                                const unsubSuccess = await handleUnsubscribe(subId);
-                                if (unsubSuccess) {
-                                    await db.execute('UPDATE containers SET subscription_id = NULL WHERE container_id = $1', [record.container_id]);
-                                }
-                            }
-
                             hasUpdates = true;
                         }
                     }
@@ -261,7 +256,7 @@ export default function ContainerList({ currentUser, onNavigateToShipment }) {
         setLoading(true);
         try {
             const db = await getDb();
-            const res = await db.select('SELECT * FROM containers WHERE year = $1 ORDER BY container_id ASC', [year]);
+            const res = await db.select('SELECT c.*, os.ocean_shipper_colour FROM containers c LEFT JOIN ocean_shippers os ON c.ocean_shipper = os.ocean_shipper_id WHERE c.year = $1 ORDER BY c.container_id ASC', [year]);
             setRecords(res);
         } catch (e) {
             console.error('Failed to load records', e);
@@ -284,22 +279,11 @@ export default function ContainerList({ currentUser, onNavigateToShipment }) {
         try {
             const db = await getDb();
 
-            // Handle seq calculation for delivery
-            let newSeq = editingRecord ? editingRecord.seq : null;
-            if (formData.delivery) {
-                if (!editingRecord || !editingRecord.delivery) {
-                    const countRes = await db.select(
-                        "SELECT COUNT(*) as c FROM containers WHERE year = $1 AND delivery IS NOT NULL AND delivery != ''",
-                        [activeYear]
-                    );
-                    newSeq = countRes[0].c + 1;
-                }
-            } else if (editingRecord && editingRecord.delivery && !formData.delivery) {
-                newSeq = null;
-            }
-
-            const data = { ...formData, seq: newSeq };
+            const data = { ...formData };
             delete data.year; // Handle year separately for insertion
+            delete data.ocean_shipper_colour;
+
+            let newContainerId = null;
 
             if (editingRecord) {
                 // Update
@@ -310,16 +294,64 @@ export default function ContainerList({ currentUser, onNavigateToShipment }) {
                     `UPDATE containers SET ${setString} WHERE container_id = $${cols.length + 1}`,
                     [...vals, editingRecord.container_id]
                 );
+                newContainerId = editingRecord.container_id;
             } else {
                 // Insert
                 data.year = activeYear;
                 const cols = Object.keys(data);
                 const vals = Object.values(data);
                 const placeholders = cols.map((_, i) => `$${i + 1}`).join(', ');
-                await db.execute(
+                const res = await db.execute(
                     `INSERT INTO containers (${cols.join(', ')}) VALUES (${placeholders})`,
                     vals
                 );
+                newContainerId = res.lastInsertId;
+            }
+
+            // Sync payments from shipment orders based on contents
+            if (data.contents) {
+                try {
+                    const parsedContents = JSON.parse(data.contents);
+                    const shipmentIds = parsedContents.map(b => b.shipment_id).filter(Boolean);
+                    if (shipmentIds.length > 0) {
+                        const containerId = newContainerId;
+                        const shipments = await db.select(`SELECT shipment_id, deposit, balance, payment_date FROM shipments WHERE shipment_id IN (${shipmentIds.join(',')})`);
+                        
+                        let cDep = {};
+                        let cBal = {};
+                        let cPay = {};
+                        
+                        if (editingRecord) {
+                            cDep = editingRecord.deposit ? JSON.parse(editingRecord.deposit) : {};
+                            cBal = editingRecord.balance ? JSON.parse(editingRecord.balance) : {};
+                            cPay = editingRecord.payment_date ? JSON.parse(editingRecord.payment_date) : {};
+                        }
+
+                        // Remove shipment IDs that are no longer in contents
+                        for (const key in cDep) {
+                            if (!shipmentIds.includes(key) && !shipmentIds.includes(Number(key)) && !shipmentIds.includes(String(key))) delete cDep[key];
+                        }
+                        for (const key in cBal) {
+                            if (!shipmentIds.includes(key) && !shipmentIds.includes(Number(key)) && !shipmentIds.includes(String(key))) delete cBal[key];
+                        }
+                        for (const key in cPay) {
+                            if (!shipmentIds.includes(key) && !shipmentIds.includes(Number(key)) && !shipmentIds.includes(String(key))) delete cPay[key];
+                        }
+
+                        // Add current shipment data
+                        for (const shp of shipments) {
+                            const sid = shp.shipment_id;
+                            if (shp.deposit != null) cDep[sid] = shp.deposit;
+                            if (shp.balance != null) cBal[sid] = shp.balance;
+                            if (shp.payment_date != null) cPay[sid] = shp.payment_date;
+                        }
+
+                        await db.execute(
+                            'UPDATE containers SET deposit = $1, balance = $2, payment_date = $3 WHERE container_id = $4',
+                            [JSON.stringify(cDep), JSON.stringify(cBal), JSON.stringify(cPay), containerId]
+                        );
+                    }
+                } catch (e) { console.error("Failed to sync payments to container", e); }
             }
 
             // Sync HBL numbers back to shipments table
@@ -343,37 +375,13 @@ export default function ContainerList({ currentUser, onNavigateToShipment }) {
         }
     };
 
-    const handleUnsubscribe = async (subscriptionId) => {
-        try {
-            const apiUrl = await getSetting('findteu_api_url', 'https://findteu.showtile-apis.workers.dev/api');
-            const apiKey = await getSetting('findteu_api_key', '');
-            if (!apiKey || apiKey === 'TAURI_API_KEY') return true;
 
-            const response = await fetch(`${apiUrl}/subscriptions/${subscriptionId}`, {
-                method: 'DELETE',
-                headers: { 'x-api-key': apiKey }
-            });
-            const data = await response.json();
-            if (data.success) {
-                return true;
-            } else {
-                console.warn('Unsubscribe API returned false', data);
-                return false;
-            }
-        } catch (e) {
-            console.error('Failed to unsubscribe', e);
-            return false;
-        }
-    };
 
     const handleDeleteRow = async (id, subscriptionId) => {
         if (!canWrite) return;
         const confirmed = await confirm("Are you sure you want to delete this container record?");
         if (!confirmed) return;
         try {
-            if (subscriptionId) {
-                await handleUnsubscribe(subscriptionId);
-            }
             const db = await getDb();
             await db.execute('DELETE FROM containers WHERE container_id = $1', [id]);
             loadRecords(activeYear);
@@ -509,14 +517,6 @@ export default function ContainerList({ currentUser, onNavigateToShipment }) {
                 // Increment quota after successful track
                 await incrementQuota();
 
-                // Auto unsubscribe if arrived
-                if (subId && (finalStatus.toLowerCase() === 'delivered' || finalStatus.toLowerCase() === 'empty returned')) {
-                    const unsubSuccess = await handleUnsubscribe(subId);
-                    if (unsubSuccess) {
-                        await db.execute('UPDATE containers SET subscription_id = NULL WHERE container_id = $1', [record.container_id]);
-                    }
-                }
-
                 loadRecords(activeYear);
 
             } else {
@@ -539,24 +539,41 @@ export default function ContainerList({ currentUser, onNavigateToShipment }) {
     };
 
     const exportHTML = async (print = false) => {
+        let printColsStr = '';
+        try { printColsStr = await getSetting('print_cols_container', ''); } catch(e) {}
+        let printCols = ['cntr_no', 'hbl_no', 'shipper', 'invoice_no', 'payment', 'doc', 'contents', 'tracking', 'pol', 'etd', 'eta', 'original_eta', 'delivery', 'info', 'last_free_dtn', 'ocean_shipper'];
+        if (printColsStr) {
+            try { printCols = JSON.parse(printColsStr); } catch(e) {}
+        }
+        
+        const colLabels = {
+            cntr_no: 'Container No', hbl_no: 'HBL No', shipper: 'Shipper', invoice_no: 'Invoice No',
+            payment: 'Payment', doc: 'Doc', contents: 'Contents', tracking: 'Track Status',
+            pol: 'POL', etd: 'ETD', eta: 'ETA', original_eta: 'Original ETA', delivery: 'Delivery',
+            info: 'Info', last_free_dtn: 'Last Free DTN', ocean_shipper: 'Ocean Shipper'
+        };
+
         let htmlRows = '';
         filteredRecords.forEach(r => {
             const rData = getRowParsedData(r);
-            htmlRows += `<tr>
-                <td>${r.cntr_no || ''}</td>
-                <td>${rData.shippers.map(sId => shippersMap[sId]?.name || sId).join(', ')}</td>
-                <td>${r.pol || ''}</td>
-                <td>${r.etd || ''}</td>
-                <td>${r.eta || ''}</td>
-                <td>${r.original_eta || ''}</td>
-                <td>${r.delivery || ''}</td>
-                <td>${r.warehouse_received || ''}</td>
-                <td>${r.track_status || ''}</td>
-                <td>${r.info || ''}</td>
-                <td>${r.internal_memo || ''}</td>
-                <td>${r.last_free_dtn || ''}</td>
-            </tr>`;
+            htmlRows += `<tr>`;
+            for (const col of printCols) {
+                if (col === 'shipper') {
+                    htmlRows += `<td>${(rData.shippers || []).map(sId => shippersMap[sId]?.name || sId).join(', ')}</td>`;
+                } else if (col === 'contents') {
+                    htmlRows += `<td>${(rData.contents || []).map(c => (c.products || []).map(p => p.sales_description).join(', ')).join('<br/>')}</td>`;
+                } else if (col === 'payment') {
+                    htmlRows += `<td>Dep: ${r.deposit || 0}, Bal: ${r.balance || 0}</td>`;
+                } else if (col === 'ocean_shipper') {
+                    htmlRows += `<td>${r.ocean_shipper_colour ? `<div style="width:16px;height:16px;background:${r.ocean_shipper_colour}"></div>` : ''}</td>`;
+                } else {
+                    htmlRows += `<td>${r[col] || ''}</td>`;
+                }
+            }
+            htmlRows += `</tr>`;
         });
+
+        const headerRow = printCols.map(col => `<th>${colLabels[col] || col}</th>`).join('');
 
         const html = `<!DOCTYPE html>
 <html>
@@ -580,18 +597,7 @@ export default function ContainerList({ currentUser, onNavigateToShipment }) {
     <table class="report-table">
         <thead>
             <tr>
-                <th>Container No</th>
-                <th>Shipper</th>
-                <th>POL</th>
-                <th>ETD</th>
-                <th>ETA</th>
-                <th>Original ETA</th>
-                <th>Delivery</th>
-                <th>WHS Received</th>
-                <th>Track Status</th>
-                <th>Info</th>
-                <th>Internal Memo</th>
-                <th>Last Free DTN</th>
+                ${headerRow}
             </tr>
         </thead>
         <tbody>
@@ -710,11 +716,11 @@ export default function ContainerList({ currentUser, onNavigateToShipment }) {
         }
 
         if (filterDeliveryStatus.length > 0) {
-            const today = new Date().toISOString().split('T')[0];
             let rowStatus = 'not_started';
             if (row.delivery) {
-                if (row.delivery > today) rowStatus = 'on_delivery';
-                else rowStatus = 'delivered';
+                rowStatus = 'delivered';
+            } else if (!row.delivery && rData.shipmentIds.length > 0) {
+                rowStatus = 'on_delivery';
             }
             if (!filterDeliveryStatus.includes(rowStatus)) return false;
         }
@@ -723,7 +729,8 @@ export default function ContainerList({ currentUser, onNavigateToShipment }) {
             const lowerSearch = searchContent.toLowerCase();
             const contentMatch = (row.info || '').toLowerCase().includes(lowerSearch) ||
                 (row.cntr_no || '').toLowerCase().includes(lowerSearch) ||
-                rData.productsList.join(' ').toLowerCase().includes(lowerSearch);
+                rData.productsList.join(' ').toLowerCase().includes(lowerSearch) ||
+                rData.hbls.join(' ').toLowerCase().includes(lowerSearch);
             if (!contentMatch) return false;
         }
 
@@ -844,23 +851,7 @@ export default function ContainerList({ currentUser, onNavigateToShipment }) {
         return { backgroundColor: '#f8fafc', borderRadius: '4px', padding: '2px 4px' }; // Subtle gray for unpaid but not due or missing info
     };
 
-    const handleManualUnsubscribe = async (containerId, subscriptionId) => {
-        const confirmed = await confirm("Are you sure you want to stop tracking this container?");
-        if (!confirmed) return;
-        const success = await handleUnsubscribe(subscriptionId);
-        if (success) {
-            try {
-                const db = await getDb();
-                await db.execute('UPDATE containers SET subscription_id = NULL WHERE container_id = $1', [containerId]);
-                loadRecords(activeYear);
-                alert("Unsubscribed successfully.");
-            } catch (e) {
-                console.error("Failed to update DB after unsubscribe", e);
-            }
-        } else {
-            alert("Unsubscribe failed. Please try again later.");
-        }
-    };
+
 
     const formatDate = (dateStr) => {
         if (!dateStr) return '';
@@ -972,7 +963,7 @@ export default function ContainerList({ currentUser, onNavigateToShipment }) {
                     </div>
                     <MultiSelectDropdown
                         label="Shippers"
-                        options={Object.keys(shippersMap).map(id => ({ value: id, label: shippersMap[id].name }))}
+                        options={Object.keys(shippersMap).map(id => ({ value: id, label: shippersMap[id].name })).sort((a, b) => a.label.localeCompare(b.label))}
                         selected={filterShipper}
                         onChange={setFilterShipper}
                     />
@@ -1021,6 +1012,7 @@ export default function ContainerList({ currentUser, onNavigateToShipment }) {
                             <table className="excel-table">
                                 <thead>
                                     <tr>
+                                        <th style={{ width: '16px', minWidth: '16px', padding: 0 }}></th>
                                         {canWrite && <th style={{ width: '80px', minWidth: '80px', textAlign: 'center' }}>Actions</th>}
                                         {visibleColumns.includes('cntr_no') && <th className="has-sort-icon" style={{ width: '130px', minWidth: '130px', cursor: 'pointer' }} onClick={() => handleSort('cntr_no')}><SortIcon columnKey="cntr_no" /> Container No. </th>}
                                         {visibleColumns.includes('hbl_no') && <th className="has-sort-icon" style={{ width: '120px', minWidth: '120px', cursor: 'pointer' }} onClick={() => handleSort('hbl_no')}><SortIcon columnKey="hbl_no" /> HBL No.</th>}
@@ -1052,6 +1044,7 @@ export default function ContainerList({ currentUser, onNavigateToShipment }) {
                                             const rData = getRowParsedData(row);
                                             return (
                                                 <tr key={row.container_id}>
+                                                    <td style={{ padding: 0, margin: 0, backgroundColor: row.ocean_shipper_colour || 'transparent', width: '16px', minWidth: '16px', borderRight: '1px solid #cbd5e1' }}></td>
                                                     {canWrite && (
                                                         <td style={{ width: '120px', minWidth: '120px', textAlign: 'center', verticalAlign: 'middle' }}>
                                                             <div style={{ display: 'flex', gap: '8px', justifyContent: 'center' }}>

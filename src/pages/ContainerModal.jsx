@@ -8,12 +8,15 @@ export default function ContainerModal({ record, year, onClose, onSave }) {
         cntr_no: '',
         doc: 'false',
         info: '',
+        memo: '',
+        ocean_shipper: '',
         last_free_dtn: '',
         contents: [] // Array of { shipment_id, hbl_no, products: [{product_id, sales_description}] }
     });
 
     const [openShipments, setOpenShipments] = useState([]);
     const [inventory, setInventory] = useState([]);
+    const [oceanShippers, setOceanShippers] = useState([]);
 
     useEffect(() => {
         if (record) {
@@ -30,11 +33,13 @@ export default function ContainerModal({ record, year, onClose, onSave }) {
                 cntr_no: record.cntr_no || '',
                 doc: record.doc === 'true' || record.doc === '1' ? 'true' : 'false',
                 info: record.info || '',
+                memo: record.memo || '',
+                ocean_shipper: record.ocean_shipper || '',
                 last_free_dtn: record.last_free_dtn || '',
                 contents: Array.isArray(parsedContents) ? parsedContents : []
             });
         }
-        
+
         loadOptions();
     }, [record]);
 
@@ -47,14 +52,18 @@ export default function ContainerModal({ record, year, onClose, onSave }) {
                 FROM shipments s 
                 LEFT JOIN shippers p ON s.shipper = p.shipper_id 
                 WHERE s.status = 'open' OR s.status = 'processing'
-                ORDER BY s.shipment_id DESC
+                ORDER BY p.shipper_name ASC, s.invoice_no ASC
             `);
             setOpenShipments(shpOrders);
-            
+
             // Load all inventory to get descriptions
             const inv = await db.select('SELECT product_id, sales_description FROM inventory');
             setInventory(inv);
-        } catch(e) {
+
+            // Load ocean shippers
+            const osh = await db.select('SELECT * FROM ocean_shippers ORDER BY ocean_shipper_name ASC');
+            setOceanShippers(osh);
+        } catch (e) {
             console.error("Failed to load modal options", e);
         }
     };
@@ -81,7 +90,7 @@ export default function ContainerModal({ record, year, onClose, onSave }) {
         setFormData(prev => {
             const newContents = [...prev.contents];
             newContents[index] = { ...newContents[index], [field]: value };
-            
+
             // Auto-fill HBL if they select a shipment
             if (field === 'shipment_id') {
                 const selectedShp = openShipments.find(s => s.shipment_id.toString() === value.toString());
@@ -89,7 +98,7 @@ export default function ContainerModal({ record, year, onClose, onSave }) {
                     newContents[index].hbl_no = selectedShp.hbl_no;
                 }
             }
-            
+
             return { ...prev, contents: newContents };
         });
     };
@@ -99,7 +108,7 @@ export default function ContainerModal({ record, year, onClose, onSave }) {
             const newContents = [...prev.contents];
             const block = { ...newContents[blockIndex] };
             const existingIdx = block.products.findIndex(p => p.product_id.toString() === productId.toString());
-            
+
             if (existingIdx >= 0) {
                 block.products = block.products.filter((_, i) => i !== existingIdx);
             } else {
@@ -111,7 +120,7 @@ export default function ContainerModal({ record, year, onClose, onSave }) {
                     }];
                 }
             }
-            
+
             newContents[blockIndex] = block;
             return { ...prev, contents: newContents };
         });
@@ -120,11 +129,13 @@ export default function ContainerModal({ record, year, onClose, onSave }) {
     const handleSave = () => {
         // Prepare data to send back
         // onSave will need to handle JSON stringification and HBL updates
-        onSave({ 
+        onSave({
             ...record,
             cntr_no: formData.cntr_no,
             doc: formData.doc,
             info: formData.info,
+            memo: formData.memo,
+            ocean_shipper: formData.ocean_shipper,
             last_free_dtn: formData.last_free_dtn,
             contents: JSON.stringify(formData.contents),
             year: record ? record.year : year
@@ -148,7 +159,7 @@ export default function ContainerModal({ record, year, onClose, onSave }) {
                 </div>
 
                 <div className="modal-body" style={{ maxHeight: '70vh', overflowY: 'auto', paddingRight: '10px' }}>
-                    
+
                     <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', marginBottom: '24px' }}>
                         <div className="form-group">
                             <label>Container Number</label>
@@ -162,11 +173,29 @@ export default function ContainerModal({ record, year, onClose, onSave }) {
                             <label>INFO</label>
                             <input type="text" className="form-control" value={formData.info} onChange={e => handleChange('info', e.target.value)} />
                         </div>
-                        <div className="form-group" style={{ display: 'flex', alignItems: 'flex-end', paddingBottom: '8px' }}>
+                        <div className="form-group">
+                            <label>Ocean Shipper</label>
+                            <select className="form-control" value={formData.ocean_shipper} onChange={e => handleChange('ocean_shipper', e.target.value)}>
+                                <option value="">None</option>
+                                {oceanShippers.map(os => (
+                                    <option key={os.ocean_shipper_id} value={os.ocean_shipper_id}>{os.ocean_shipper_name}</option>
+                                ))}
+                            </select>
+                        </div>
+                        <div className="form-group" style={{ gridColumn: '1 / -1' }}>
+                            <label>Memo</label>
+                            <textarea
+                                className="form-control"
+                                value={formData.memo}
+                                onChange={e => handleChange('memo', e.target.value)}
+                                style={{ minHeight: '80px', resize: 'vertical' }}
+                            />
+                        </div>
+                        <div className="form-group" style={{ display: 'flex', paddingBottom: '8px' }}>
                             <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', margin: 0 }}>
-                                <input 
-                                    type="checkbox" 
-                                    checked={formData.doc === 'true'} 
+                                <input
+                                    type="checkbox"
+                                    checked={formData.doc === 'true'}
                                     onChange={e => handleChange('doc', e.target.checked ? 'true' : 'false')}
                                     style={{ width: '18px', height: '18px' }}
                                 />
@@ -190,23 +219,23 @@ export default function ContainerModal({ record, year, onClose, onSave }) {
                         )}
                         {formData.contents.map((block, idx) => {
                             const availableProds = block.shipment_id ? getShipmentProducts(block.shipment_id) : [];
-                            
+
                             return (
                                 <div key={idx} style={{ padding: '16px', background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '6px', position: 'relative' }}>
-                                    <button 
-                                        className="btn-icon danger" 
+                                    <button
+                                        className="btn-icon danger"
                                         onClick={() => removeShipmentBlock(idx)}
                                         style={{ position: 'absolute', top: '12px', right: '12px', color: '#ef4444' }}
                                     >
                                         <Trash2 size={16} />
                                     </button>
-                                    
+
                                     <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: '16px', marginBottom: '16px', paddingRight: '24px' }}>
                                         <div className="form-group" style={{ margin: 0 }}>
                                             <label style={{ fontSize: '0.85rem' }}>Shipment Order</label>
-                                            <select 
-                                                className="form-control" 
-                                                value={block.shipment_id} 
+                                            <select
+                                                className="form-control"
+                                                value={block.shipment_id}
                                                 onChange={e => handleContentChange(idx, 'shipment_id', e.target.value)}
                                             >
                                                 <option value="" disabled>Select a shipment...</option>
@@ -223,16 +252,16 @@ export default function ContainerModal({ record, year, onClose, onSave }) {
                                         </div>
                                         <div className="form-group" style={{ margin: 0 }}>
                                             <label style={{ fontSize: '0.85rem' }}>HBL No.</label>
-                                            <input 
-                                                type="text" 
-                                                className="form-control" 
-                                                value={block.hbl_no} 
+                                            <input
+                                                type="text"
+                                                className="form-control"
+                                                value={block.hbl_no}
                                                 onChange={e => handleContentChange(idx, 'hbl_no', e.target.value)}
                                                 placeholder="Enter HBL"
                                             />
                                         </div>
                                     </div>
-                                    
+
                                     <div className="form-group" style={{ margin: 0 }}>
                                         <label style={{ fontSize: '0.85rem' }}>Products from this Shipment</label>
                                         {block.shipment_id ? (
@@ -240,7 +269,7 @@ export default function ContainerModal({ record, year, onClose, onSave }) {
                                                 {availableProds.map(p => {
                                                     const isSelected = block.products.some(selected => selected.product_id.toString() === p.product_id.toString());
                                                     return (
-                                                        <div 
+                                                        <div
                                                             key={p.product_id}
                                                             onClick={() => toggleProduct(idx, p.product_id)}
                                                             style={{

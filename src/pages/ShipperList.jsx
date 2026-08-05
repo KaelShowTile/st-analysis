@@ -3,11 +3,11 @@ import { getDb } from '../db/Database';
 import { Plus, Trash2 } from 'lucide-react';
 import './Containers.css'; // Reuse container CSS since the layout is similar
 
-export default function ShipperList({ currentUser }) {
+export default function ShipperList({ currentUser, isActive }) {
     const [records, setRecords] = useState([]);
     const [loading, setLoading] = useState(false);
 
-    const canWrite = currentUser?.permissions?.containers?.write;
+    const canWrite = currentUser?.permissions?.shippers?.write;
 
     const loadRecords = async () => {
         setLoading(true);
@@ -23,8 +23,10 @@ export default function ShipperList({ currentUser }) {
     };
 
     useEffect(() => {
-        loadRecords();
-    }, []);
+        if (isActive !== false) {
+            loadRecords();
+        }
+    }, [isActive]);
 
     const handleAddRow = async () => {
         if (!canWrite) return;

@@ -166,7 +166,16 @@ const initializeTables = async (db) => {
             shipper_id INTEGER PRIMARY KEY AUTOINCREMENT,
             shipper_name TEXT,
             payment_term TEXT,
-            payment_period INTEGER
+            payment_period INTEGER,
+            deposit INTEGER DEFAULT 0
+        )
+    `);
+
+    await db.execute(`
+        CREATE TABLE IF NOT EXISTS ocean_shippers (
+            ocean_shipper_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ocean_shipper_name TEXT,
+            ocean_shipper_colour TEXT
         )
     `);
 
@@ -232,7 +241,7 @@ const initializeTables = async (db) => {
     } catch (e) {}
 
     // Container migrations
-    const containerCols = ['original_eta', 'product_sku', 'origin', 'destination', 'warehouse_received', 'track_status', 'shippment', 'subscription_id'];
+    const containerCols = ['original_eta', 'product_sku', 'origin', 'destination', 'warehouse_received', 'track_status', 'shippment', 'subscription_id', 'ocean_shipper', 'memo'];
     for (const col of containerCols) {
         try {
             await db.execute(`ALTER TABLE containers ADD COLUMN ${col} TEXT`);
@@ -282,7 +291,11 @@ const initializeTables = async (db) => {
             sales: { read: true, write: true },
             reports: { read: true, write: true },
             settings: { read: true, write: true },
-            containers: { read: true, write: true }
+            containerDashboard: { read: true, write: true },
+            shipmentOrders: { read: true, write: true },
+            containerList: { read: true, write: true },
+            shippers: { read: true, write: true },
+            oceanShippers: { read: true, write: true }
         });
         await db.execute(
             "INSERT INTO users (username, password, permissions) VALUES ($1, $2, $3)",
@@ -296,8 +309,20 @@ const initializeTables = async (db) => {
                 const p = JSON.parse(user.permissions || '{}');
                 let updated = false;
                 
-                if (!p.containers) {
-                    p.containers = { read: true, write: true };
+                if (p.containers) {
+                    p.containerDashboard = p.containers;
+                    p.shipmentOrders = p.containers;
+                    p.containerList = p.containers;
+                    p.shippers = p.containers;
+                    delete p.containers;
+                    updated = true;
+                }
+                
+                if (!p.containerDashboard) {
+                    p.containerDashboard = { read: true, write: true };
+                    p.shipmentOrders = { read: true, write: true };
+                    p.containerList = { read: true, write: true };
+                    p.shippers = { read: true, write: true };
                     updated = true;
                 }
                 

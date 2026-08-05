@@ -91,6 +91,17 @@
     background-color: var(--bg-color);
 }
 
+.attributes-list.product-parameters-list {
+    flex-direction: unset;
+    flex-wrap: wrap;
+    gap: 2%;
+}
+
+.attributes-list.product-parameters-list .attribute-item {
+    width: 32%;
+    margin-bottom: 12px;
+}
+
 .badge {
     padding: 4px 8px;
     border-radius: 4px;

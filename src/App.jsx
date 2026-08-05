@@ -161,7 +161,7 @@ function App() {
                   Reports
                 </li>
             )}
-            {p.containers?.read && (
+            {(p.containerDashboard?.read || p.shipmentOrders?.read || p.containerList?.read || p.shippers?.read) && (
                 <li className={`nav-item ${activeTab === 'containers' ? 'active' : ''}`} onClick={() => navigateTo('containers')}>
                   <Box size={18} />
                   Containers
@@ -189,12 +189,34 @@ function App() {
       </div>
       <div className="main-content">
         <div className="content-area">
-          {activeTab === 'dashboard' && <Dashboard currentUser={currentUser} onNavigate={navigateTo} />}
-          {activeTab === 'inventory' && p.inventory?.read && <Inventory currentUser={currentUser} />}
-          {activeTab === 'sales' && p.sales?.read && <Sales currentUser={currentUser} />}
-          {activeTab === 'reports' && p.reports?.read && <Reports currentUser={currentUser} initialReportId={selectedReportId} />}
-          {activeTab === 'containers' && p.containers?.read && <Containers currentUser={currentUser} />}
-          {activeTab === 'settings' && p.settings?.read && <Settings currentUser={currentUser} />}
+          <div style={{ display: activeTab === 'dashboard' ? 'block' : 'none', height: '100%' }}>
+            <Dashboard currentUser={currentUser} onNavigate={navigateTo} isActive={activeTab === 'dashboard'} />
+          </div>
+          {p.inventory?.read && (
+            <div style={{ display: activeTab === 'inventory' ? 'block' : 'none', height: '100%' }}>
+              <Inventory currentUser={currentUser} isActive={activeTab === 'inventory'} />
+            </div>
+          )}
+          {p.sales?.read && (
+            <div style={{ display: activeTab === 'sales' ? 'block' : 'none', height: '100%' }}>
+              <Sales currentUser={currentUser} isActive={activeTab === 'sales'} />
+            </div>
+          )}
+          {p.reports?.read && (
+            <div style={{ display: activeTab === 'reports' ? 'block' : 'none', height: '100%' }}>
+              <Reports currentUser={currentUser} initialReportId={selectedReportId} isActive={activeTab === 'reports'} />
+            </div>
+          )}
+          {(p.containerDashboard?.read || p.shipmentOrders?.read || p.containerList?.read || p.shippers?.read) && (
+            <div style={{ display: activeTab === 'containers' ? 'block' : 'none', height: '100%' }}>
+              <Containers currentUser={currentUser} isActive={activeTab === 'containers'} />
+            </div>
+          )}
+          {p.settings?.read && (
+            <div style={{ display: activeTab === 'settings' ? 'block' : 'none', height: '100%' }}>
+              <Settings currentUser={currentUser} isActive={activeTab === 'settings'} />
+            </div>
+          )}
         </div>
       </div>
     </div>
