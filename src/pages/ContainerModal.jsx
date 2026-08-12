@@ -174,7 +174,7 @@ export default function ContainerModal({ record, year, onClose, onSave }) {
                             <input type="text" className="form-control" value={formData.info} onChange={e => handleChange('info', e.target.value)} />
                         </div>
                         <div className="form-group">
-                            <label>Ocean Shipper</label>
+                            <label>Forwarder</label>
                             <select className="form-control" value={formData.ocean_shipper} onChange={e => handleChange('ocean_shipper', e.target.value)}>
                                 <option value="">None</option>
                                 {oceanShippers.map(os => (
@@ -303,8 +303,8 @@ export default function ContainerModal({ record, year, onClose, onSave }) {
                 </div>
 
                 <div className="modal-footer" style={{ marginTop: '20px', paddingTop: '16px', borderTop: '1px solid var(--border-color)', display: 'flex', justifyContent: 'flex-end', gap: '12px' }}>
-                    <button className="btn-secondary" onClick={onClose}>Cancel</button>
-                    <button className="btn-primary" onClick={handleSave}>Save Container</button>
+                    <button className="btn-secondary" style={{ padding: '8px 12px' }} onClick={onClose}>Cancel</button>
+                    <button className="btn-primary" style={{ padding: '8px 12px' }} onClick={handleSave}>Save Container</button>
                 </div>
             </div>
         </div>

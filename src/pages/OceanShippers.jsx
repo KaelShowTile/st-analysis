@@ -16,7 +16,7 @@ export default function OceanShippers({ currentUser, isActive }) {
             const res = await db.select('SELECT * FROM ocean_shippers ORDER BY ocean_shipper_id ASC');
             setRecords(res);
         } catch (e) {
-            console.error('Failed to load ocean_shippers', e);
+            console.error('Failed to load forwarders', e);
         } finally {
             setLoading(false);
         }
@@ -35,19 +35,19 @@ export default function OceanShippers({ currentUser, isActive }) {
             await db.execute('INSERT INTO ocean_shippers (ocean_shipper_name, ocean_shipper_colour) VALUES ($1, $2)', ['', '#3b82f6']);
             loadRecords();
         } catch (e) {
-            console.error('Failed to add shipper', e);
+            console.error('Failed to add forwarder', e);
         }
     };
 
     const handleDeleteRow = async (id) => {
         if (!canWrite) return;
-        if (!window.confirm("Are you sure you want to delete this shipper?")) return;
+        if (!window.confirm("Are you sure you want to delete this forwarder?")) return;
         try {
             const db = await getDb();
             await db.execute('DELETE FROM ocean_shippers WHERE ocean_shipper_id = $1', [id]);
             loadRecords();
         } catch (e) {
-            console.error('Failed to delete shipper', e);
+            console.error('Failed to delete forwarder', e);
         }
     };
 
@@ -65,7 +65,7 @@ export default function OceanShippers({ currentUser, isActive }) {
                 [val, record.ocean_shipper_id]
             );
         } catch (e) {
-            console.error('Failed to update shipper', e);
+            console.error('Failed to update forwarder', e);
             alert("Failed to auto-save cell.");
             loadRecords(); // Revert optimistic update
         }
@@ -75,7 +75,7 @@ export default function OceanShippers({ currentUser, isActive }) {
         <div className="containers-main" style={{ height: '100%', flex: 1 }}>
             <div className="main-header">
                 <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                    <h2 style={{ margin: 0 }}>Shippers</h2>
+                    <h2 style={{ margin: 0 }}>Forwarders</h2>
                     {canWrite && (
                         <button className="btn-primary" onClick={handleAddRow}>
                             <Plus size={16} style={{ marginRight: '6px' }} /> Add Row
@@ -93,7 +93,7 @@ export default function OceanShippers({ currentUser, isActive }) {
                             <thead>
                                 <tr>
                                     <th style={{ width: '60px', minWidth: '60px' }}>ID</th>
-                                    <th style={{ width: '250px', minWidth: '250px' }}>Ocean Shipper Name</th>
+                                    <th style={{ width: '250px', minWidth: '250px' }}>Forwarder Name</th>
                                     <th style={{ width: '150px', minWidth: '150px' }}>Colour</th>
                                     {canWrite && <th style={{ width: '40px', minWidth: '40px' }}></th>}
                                 </tr>
@@ -102,7 +102,7 @@ export default function OceanShippers({ currentUser, isActive }) {
                                 {records.length === 0 ? (
                                     <tr>
                                         <td colSpan={canWrite ? 4 : 3} style={{ textAlign: 'center', padding: '32px', color: '#94a3b8' }}>
-                                            No ocean_shippers found.
+                                            No forwarders found.
                                         </td>
                                     </tr>
                                 ) : (

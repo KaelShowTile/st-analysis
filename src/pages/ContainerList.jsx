@@ -130,7 +130,7 @@ export default function ContainerList({ currentUser, onNavigateToShipment, isAct
             const shp = await db.select('SELECT shipper_id, shipper_name, payment_term, payment_period, deposit FROM shippers');
             const sMap = {};
             shp.forEach(s => {
-                const sData = { name: s.shipper_name, payment_term: s.payment_term, payment_period: s.payment_period, deposit: s.deposit };
+                const sData = { id: s.shipper_id, name: s.shipper_name, payment_term: s.payment_term, payment_period: s.payment_period, deposit: s.deposit };
                 sMap[s.shipper_id] = sData;
                 sMap[s.shipper_name] = sData;
             });
@@ -256,7 +256,7 @@ export default function ContainerList({ currentUser, onNavigateToShipment, isAct
         setLoading(true);
         try {
             const db = await getDb();
-            const res = await db.select('SELECT c.*, os.ocean_shipper_colour FROM containers c LEFT JOIN ocean_shippers os ON c.ocean_shipper = os.ocean_shipper_id WHERE c.year = $1 ORDER BY c.container_id ASC', [year]);
+            const res = await db.select('SELECT c.*, os.ocean_shipper_colour, os.ocean_shipper_name FROM containers c LEFT JOIN ocean_shippers os ON c.ocean_shipper = os.ocean_shipper_id WHERE c.year = $1 ORDER BY c.container_id ASC', [year]);
             setRecords(res);
         } catch (e) {
             console.error('Failed to load records', e);
@@ -282,6 +282,7 @@ export default function ContainerList({ currentUser, onNavigateToShipment, isAct
             const data = { ...formData };
             delete data.year; // Handle year separately for insertion
             delete data.ocean_shipper_colour;
+            delete data.ocean_shipper_name;
 
             let newContainerId = null;
 
@@ -316,11 +317,11 @@ export default function ContainerList({ currentUser, onNavigateToShipment, isAct
                     if (shipmentIds.length > 0) {
                         const containerId = newContainerId;
                         const shipments = await db.select(`SELECT shipment_id, deposit, balance, payment_date FROM shipments WHERE shipment_id IN (${shipmentIds.join(',')})`);
-                        
+
                         let cDep = {};
                         let cBal = {};
                         let cPay = {};
-                        
+
                         if (editingRecord) {
                             cDep = editingRecord.deposit ? JSON.parse(editingRecord.deposit) : {};
                             cBal = editingRecord.balance ? JSON.parse(editingRecord.balance) : {};
@@ -540,17 +541,17 @@ export default function ContainerList({ currentUser, onNavigateToShipment, isAct
 
     const exportHTML = async (print = false) => {
         let printColsStr = '';
-        try { printColsStr = await getSetting('print_cols_container', ''); } catch(e) {}
+        try { printColsStr = await getSetting('print_cols_container', ''); } catch (e) { }
         let printCols = ['cntr_no', 'hbl_no', 'shipper', 'invoice_no', 'payment', 'doc', 'contents', 'tracking', 'pol', 'etd', 'eta', 'original_eta', 'delivery', 'info', 'last_free_dtn', 'ocean_shipper'];
         if (printColsStr) {
-            try { printCols = JSON.parse(printColsStr); } catch(e) {}
+            try { printCols = JSON.parse(printColsStr); } catch (e) { }
         }
-        
+
         const colLabels = {
             cntr_no: 'Container No', hbl_no: 'HBL No', shipper: 'Shipper', invoice_no: 'Invoice No',
             payment: 'Payment', doc: 'Doc', contents: 'Contents', tracking: 'Track Status',
             pol: 'POL', etd: 'ETD', eta: 'ETA', original_eta: 'Original ETA', delivery: 'Delivery',
-            info: 'Info', last_free_dtn: 'Last Free DTN', ocean_shipper: 'Ocean Shipper'
+            info: 'Info', last_free_dtn: 'Last Free DTN', ocean_shipper: 'Forwarder'
         };
 
         let htmlRows = '';
@@ -561,11 +562,34 @@ export default function ContainerList({ currentUser, onNavigateToShipment, isAct
                 if (col === 'shipper') {
                     htmlRows += `<td>${(rData.shippers || []).map(sId => shippersMap[sId]?.name || sId).join(', ')}</td>`;
                 } else if (col === 'contents') {
-                    htmlRows += `<td>${(rData.contents || []).map(c => (c.products || []).map(p => p.sales_description).join(', ')).join('<br/>')}</td>`;
+                    htmlRows += `<td>${(rData.productsList || []).join('<br/>')}</td>`;
                 } else if (col === 'payment') {
-                    htmlRows += `<td>Dep: ${r.deposit || 0}, Bal: ${r.balance || 0}</td>`;
+                    let paymentHtml = (rData.shipmentIds || []).map(sId => {
+                        const shipment = shipmentsMap[sId];
+                        if (!shipment) return '';
+                        const shipper = shippersMap[shipment.shipper];
+                        const rate = shipper ? (shipper.deposit || 0) : 0;
+
+                        let cDep = {}; let cBal = {}; let cPay = {};
+                        try { if (r.deposit) cDep = JSON.parse(r.deposit); } catch (e) { }
+                        try { if (r.balance) cBal = JSON.parse(r.balance); } catch (e) { }
+                        try { if (r.payment_date) cPay = JSON.parse(r.payment_date); } catch (e) { }
+
+                        const isDepositPaid = cDep[sId] != null;
+                        const isBalancePaid = cBal[sId] != null;
+                        const dateStr = cPay[sId] ? ` (${cPay[sId]})` : '';
+
+                        return `Dep ${rate}%: ${isDepositPaid ? 'Paid' : 'Pending'} | Bal ${100 - rate}%: ${isBalancePaid ? 'Paid' : 'Pending'}${dateStr}`;
+                    }).filter(Boolean).join('<br/>');
+                    htmlRows += `<td>${paymentHtml}</td>`;
                 } else if (col === 'ocean_shipper') {
-                    htmlRows += `<td>${r.ocean_shipper_colour ? `<div style="width:16px;height:16px;background:${r.ocean_shipper_colour}"></div>` : ''}</td>`;
+                    htmlRows += `<td>${r.ocean_shipper_name || ''}</td>`;
+                } else if (col === 'hbl_no') {
+                    htmlRows += `<td>${(rData.hbls || []).join(', ')}</td>`;
+                } else if (col === 'invoice_no') {
+                    htmlRows += `<td>${(rData.invoices || []).join(', ')}</td>`;
+                } else if (col === 'tracking') {
+                    htmlRows += `<td>${r.track_status || ''}</td>`;
                 } else {
                     htmlRows += `<td>${r[col] || ''}</td>`;
                 }
@@ -687,7 +711,10 @@ export default function ContainerList({ currentUser, onNavigateToShipment, isAct
         const rData = getRowParsedData(row);
 
         if (filterShipper.length > 0) {
-            const hasMatch = rData.shippers.some(sId => filterShipper.includes(sId.toString()));
+            const hasMatch = rData.shippers.some(sId => {
+                const canonicalId = shippersMap[sId]?.id?.toString() || sId.toString();
+                return filterShipper.includes(canonicalId);
+            });
             if (!hasMatch) return false;
         }
 
@@ -718,9 +745,12 @@ export default function ContainerList({ currentUser, onNavigateToShipment, isAct
         if (filterDeliveryStatus.length > 0) {
             let rowStatus = 'not_started';
             if (row.delivery) {
-                rowStatus = 'delivered';
-            } else if (!row.delivery && rData.shipmentIds.length > 0) {
-                rowStatus = 'on_delivery';
+                const todayStr = new Date().toISOString().split('T')[0];
+                if (row.delivery < todayStr) {
+                    rowStatus = 'delivered';
+                } else {
+                    rowStatus = 'on_delivery';
+                }
             }
             if (!filterDeliveryStatus.includes(rowStatus)) return false;
         }
@@ -887,7 +917,7 @@ export default function ContainerList({ currentUser, onNavigateToShipment, isAct
         const key = sortConfig.key;
 
         let valA, valB;
-        if (['cntr_no', 'pol', 'etd', 'eta', 'original_eta', 'delivery', 'info', 'last_free_dtn', 'track_status'].includes(key)) {
+        if (['cntr_no', 'pol', 'etd', 'eta', 'original_eta', 'delivery', 'info', 'last_free_dtn', 'track_status', 'ocean_shipper_name'].includes(key)) {
             valA = a[key] || '';
             valB = b[key] || '';
         } else {
@@ -963,7 +993,7 @@ export default function ContainerList({ currentUser, onNavigateToShipment, isAct
                     </div>
                     <MultiSelectDropdown
                         label="Shippers"
-                        options={Object.keys(shippersMap).map(id => ({ value: id, label: shippersMap[id].name })).sort((a, b) => a.label.localeCompare(b.label))}
+                        options={Array.from(new Map(Object.values(shippersMap).map(s => [s.id, { value: s.id.toString(), label: s.name }])).values()).sort((a, b) => a.label.localeCompare(b.label))}
                         selected={filterShipper}
                         onChange={setFilterShipper}
                     />
@@ -1012,7 +1042,11 @@ export default function ContainerList({ currentUser, onNavigateToShipment, isAct
                             <table className="excel-table">
                                 <thead>
                                     <tr>
-                                        <th style={{ width: '16px', minWidth: '16px', padding: 0 }}></th>
+                                        <th className="has-sort-icon" style={{ width: '24px', minWidth: '24px', padding: 0, cursor: 'pointer' }} onClick={() => handleSort('ocean_shipper_name')} title="Sort by Forwarder">
+                                            <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', width: '100%', overflow: 'hidden' }}>
+                                                <SortIcon columnKey="ocean_shipper_name" />
+                                            </div>
+                                        </th>
                                         {canWrite && <th style={{ width: '80px', minWidth: '80px', textAlign: 'center' }}>Actions</th>}
                                         {visibleColumns.includes('cntr_no') && <th className="has-sort-icon" style={{ width: '130px', minWidth: '130px', cursor: 'pointer' }} onClick={() => handleSort('cntr_no')}><SortIcon columnKey="cntr_no" /> Container No. </th>}
                                         {visibleColumns.includes('hbl_no') && <th className="has-sort-icon" style={{ width: '120px', minWidth: '120px', cursor: 'pointer' }} onClick={() => handleSort('hbl_no')}><SortIcon columnKey="hbl_no" /> HBL No.</th>}
@@ -1044,7 +1078,9 @@ export default function ContainerList({ currentUser, onNavigateToShipment, isAct
                                             const rData = getRowParsedData(row);
                                             return (
                                                 <tr key={row.container_id}>
-                                                    <td style={{ padding: 0, margin: 0, backgroundColor: row.ocean_shipper_colour || 'transparent', width: '16px', minWidth: '16px', borderRight: '1px solid #cbd5e1' }}></td>
+                                                    <td style={{ padding: 0, margin: 0, backgroundColor: row.ocean_shipper_colour || 'transparent', width: '24px', minWidth: '24px', borderRight: '1px solid #cbd5e1' }}>
+                                                        <span style={{ display: 'none' }}>{row.ocean_shipper_name}</span>
+                                                    </td>
                                                     {canWrite && (
                                                         <td style={{ width: '120px', minWidth: '120px', textAlign: 'center', verticalAlign: 'middle' }}>
                                                             <div style={{ display: 'flex', gap: '8px', justifyContent: 'center' }}>

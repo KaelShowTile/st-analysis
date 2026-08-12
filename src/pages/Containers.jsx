@@ -71,7 +71,7 @@ export default function Containers({ currentUser, isActive }) {
                         className={`subnav-btn ${subTab === 'ocean_shipper' ? 'active' : ''}`}
                         onClick={() => setSubTab('ocean_shipper')}
                     >
-                        Ocean Shippers
+                        Forwarders
                     </button>
                 )}
             </div>

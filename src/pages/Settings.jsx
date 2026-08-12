@@ -218,11 +218,11 @@ export default function Settings({ currentUser }) {
 
         const pcStr = await getSetting('print_cols_container', '');
         if (pcStr) {
-            try { setPrintColsContainer(JSON.parse(pcStr)); } catch(e) {}
+            try { setPrintColsContainer(JSON.parse(pcStr)); } catch (e) { }
         }
         const psStr = await getSetting('print_cols_shipment', '');
         if (psStr) {
-            try { setPrintColsShipment(JSON.parse(psStr)); } catch(e) {}
+            try { setPrintColsShipment(JSON.parse(psStr)); } catch (e) { }
         }
     };
 
@@ -508,26 +508,26 @@ export default function Settings({ currentUser }) {
                 </div>
 
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '16px', marginTop: '12px' }}>
-                        <div>
-                            <label className="form-label" style={{ fontWeight: 'bold' }}>FindTEU API URL</label>
-                            <input
-                                type="text"
-                                className="form-input"
-                                value={findTeuApi}
-                                onChange={e => setFindTeuApi(e.target.value)}
-                                placeholder="https://..."
-                            />
-                        </div>
-                        <div>
-                            <label className="form-label" style={{ fontWeight: 'bold' }}>API Key</label>
-                            <input
-                                type="text"
-                                className="form-input"
-                                value={findTeuApiKey}
-                                onChange={e => setFindTeuApiKey(e.target.value)}
-                            />
-                        </div>
+                    <div>
+                        <label className="form-label" style={{ fontWeight: 'bold' }}>FindTEU API URL</label>
+                        <input
+                            type="text"
+                            className="form-input"
+                            value={findTeuApi}
+                            onChange={e => setFindTeuApi(e.target.value)}
+                            placeholder="https://..."
+                        />
                     </div>
+                    <div>
+                        <label className="form-label" style={{ fontWeight: 'bold' }}>API Key</label>
+                        <input
+                            type="text"
+                            className="form-input"
+                            value={findTeuApiKey}
+                            onChange={e => setFindTeuApiKey(e.target.value)}
+                        />
+                    </div>
+                </div>
 
                 <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '12px' }}>
                     <button onClick={handleSaveFindTeuSettings} className="btn-primary">
@@ -546,22 +546,22 @@ export default function Settings({ currentUser }) {
                         <Save size={14} style={{ marginRight: '6px' }} /> Save Print Settings
                     </button>
                 </div>
-                
+
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '32px' }}>
                     <div>
                         <h4 style={{ marginBottom: '12px' }}>Container List</h4>
                         <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', maxHeight: '250px', overflowY: 'auto', padding: '12px', border: '1px solid var(--border-color)', borderRadius: '6px', background: 'var(--surface-color)' }}>
                             {['cntr_no', 'hbl_no', 'shipper', 'invoice_no', 'payment', 'doc', 'contents', 'tracking', 'pol', 'etd', 'eta', 'original_eta', 'delivery', 'info', 'last_free_dtn', 'ocean_shipper'].map(col => (
                                 <label key={col} style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', textTransform: 'capitalize' }}>
-                                    <input 
-                                        type="checkbox" 
+                                    <input
+                                        type="checkbox"
                                         checked={printColsContainer.includes(col)}
                                         onChange={(e) => {
                                             if (e.target.checked) setPrintColsContainer([...printColsContainer, col]);
                                             else setPrintColsContainer(printColsContainer.filter(c => c !== col));
                                         }}
                                     />
-                                    {col.replace(/_/g, ' ')}
+                                    {col === 'ocean_shipper' ? 'Forwarder' : col.replace(/_/g, ' ')}
                                 </label>
                             ))}
                         </div>
@@ -571,8 +571,8 @@ export default function Settings({ currentUser }) {
                         <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', maxHeight: '250px', overflowY: 'auto', padding: '12px', border: '1px solid var(--border-color)', borderRadius: '6px', background: 'var(--surface-color)' }}>
                             {['invoice_no', 'hbl_no', 'shipper_name', 'est_date', 'cntr_no', 'products', 'note', 'deposit', 'balance'].map(col => (
                                 <label key={col} style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', textTransform: 'capitalize' }}>
-                                    <input 
-                                        type="checkbox" 
+                                    <input
+                                        type="checkbox"
                                         checked={printColsShipment.includes(col)}
                                         onChange={(e) => {
                                             if (e.target.checked) setPrintColsShipment([...printColsShipment, col]);

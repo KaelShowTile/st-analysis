@@ -311,7 +311,7 @@ export default function ContainerReport({ currentUser, onNavigateToShipment, isA
             return;
         }
         setDetailRecord(record);
-        if (title === 'Docs Not Ready') {
+        if (title === 'Docs Not Ready' || title === 'Containers in Transit') {
             setEditModalOpen(true);
         } else {
             setDetailModalOpen(true);
@@ -436,7 +436,9 @@ export default function ContainerReport({ currentUser, onNavigateToShipment, isA
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '24px', marginBottom: '32px' }}>
                     <div style={{ background: 'white', padding: '24px', borderRadius: '8px', boxShadow: '0 1px 3px rgba(0,0,0,0.1)', border: '1px solid var(--border-color)' }}>
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' }}>
-                            <h3 style={{ margin: 0, color: '#475569', fontSize: '1rem', fontWeight: '600' }}>Arrived Containers</h3>
+                            <h3 style={{ margin: 0, color: '#475569', fontSize: '1rem', fontWeight: '600' }}>
+                                Arrived Containers ({chartData.monthlyArrivals?.reduce((sum, item) => sum + (item.Count || 0), 0) || 0})
+                            </h3>
                             <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                                 <input type="date" value={chart1Dates.start} onChange={e => setChart1Dates(p => ({ ...p, start: e.target.value }))} style={{ padding: '4px', fontSize: '0.8rem', border: '1px solid #cbd5e1', borderRadius: '4px' }} />
                                 <span>-</span>
@@ -456,7 +458,9 @@ export default function ContainerReport({ currentUser, onNavigateToShipment, isA
 
                     <div style={{ background: 'white', padding: '24px', borderRadius: '8px', boxShadow: '0 1px 3px rgba(0,0,0,0.1)', border: '1px solid var(--border-color)' }}>
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' }}>
-                            <h3 style={{ margin: 0, color: '#475569', fontSize: '1rem', fontWeight: '600' }}>Shipments by Origin</h3>
+                            <h3 style={{ margin: 0, color: '#475569', fontSize: '1rem', fontWeight: '600' }}>
+                                Shipments by Origin ({chartData.originStats?.reduce((sum, item) => sum + (item.Count || 0), 0) || 0})
+                            </h3>
                             <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                                 <input type="date" value={chart2Dates.start} onChange={e => setChart2Dates(p => ({ ...p, start: e.target.value }))} style={{ padding: '4px', fontSize: '0.8rem', border: '1px solid #cbd5e1', borderRadius: '4px' }} />
                                 <span>-</span>
@@ -480,7 +484,9 @@ export default function ContainerReport({ currentUser, onNavigateToShipment, isA
 
                     <div style={{ background: 'white', padding: '24px', borderRadius: '8px', boxShadow: '0 1px 3px rgba(0,0,0,0.1)', border: '1px solid var(--border-color)', gridColumn: '1 / -1' }}>
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' }}>
-                            <h3 style={{ margin: 0, color: '#475569', fontSize: '1rem', fontWeight: '600' }}>Top 5 Shippers by Container Volume</h3>
+                            <h3 style={{ margin: 0, color: '#475569', fontSize: '1rem', fontWeight: '600' }}>
+                                Top 5 Shippers by Container Volume ({chartData.shipperStats?.reduce((sum, item) => sum + (item.Count || 0), 0) || 0})
+                            </h3>
                             <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                                 <input type="date" value={chart3Dates.start} onChange={e => setChart3Dates(p => ({ ...p, start: e.target.value }))} style={{ padding: '4px', fontSize: '0.8rem', border: '1px solid #cbd5e1', borderRadius: '4px' }} />
                                 <span>-</span>

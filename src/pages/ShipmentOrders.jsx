@@ -120,6 +120,10 @@ export default function ShipmentOrders({ currentUser, initialEditId, onClearEdit
                         }
                     }
                 }
+                const invNo = o.invoice_no || '';
+                if (invNo.toLowerCase().includes(lowerSearch)) {
+                    return true;
+                }
                 return false;
             });
         }
@@ -337,6 +341,33 @@ export default function ShipmentOrders({ currentUser, initialEditId, onClearEdit
             cntr_no: 'Container No.', products: 'Products', note: 'Note', deposit: 'Deposit', balance: 'Balance'
         };
 
+        let shipmentToContainer = {};
+        let shipmentToHbl = {};
+        try {
+            const db = await getDb();
+            const cntrs = await db.select('SELECT cntr_no, contents FROM containers');
+            cntrs.forEach(c => {
+                if (c.contents) {
+                    try {
+                        const arr = JSON.parse(c.contents);
+                        arr.forEach(item => {
+                            if (item.shipment_id) {
+                                if (!shipmentToContainer[item.shipment_id]) shipmentToContainer[item.shipment_id] = new Set();
+                                shipmentToContainer[item.shipment_id].add(c.cntr_no || 'Unknown');
+                                
+                                if (item.hbl_no) {
+                                    if (!shipmentToHbl[item.shipment_id]) shipmentToHbl[item.shipment_id] = new Set();
+                                    shipmentToHbl[item.shipment_id].add(item.hbl_no);
+                                }
+                            }
+                        });
+                    } catch(e){}
+                }
+            });
+        } catch(e) {
+            console.error("Failed to load containers for export mapping", e);
+        }
+
         let htmlRows = '';
         sortedOrders.forEach(order => {
             const s = shippers.find(x => x.shipper_id == order.shipper);
@@ -353,6 +384,12 @@ export default function ShipmentOrders({ currentUser, initialEditId, onClearEdit
                     htmlRows += `<td>${dRate}%: ${order.deposit != null ? 'Paid' : 'Pending'}${order.payment_date && order.deposit != null ? `<br/>Date: ${order.payment_date}` : ''}</td>`;
                 } else if (col === 'balance') {
                     htmlRows += `<td>${bRate}%: ${order.balance != null ? 'Paid' : 'Pending'}</td>`;
+                } else if (col === 'cntr_no') {
+                    const cntrs = shipmentToContainer[order.shipment_id] ? Array.from(shipmentToContainer[order.shipment_id]).join(', ') : '';
+                    htmlRows += `<td>${cntrs}</td>`;
+                } else if (col === 'hbl_no') {
+                    const hbls = shipmentToHbl[order.shipment_id] ? Array.from(shipmentToHbl[order.shipment_id]).join(', ') : '';
+                    htmlRows += `<td>${hbls || order.hbl_no || ''}</td>`;
                 } else {
                     htmlRows += `<td>${order[col] || ''}</td>`;
                 }
