@@ -4,6 +4,8 @@ import ShipperList from './ShipperList';
 import ContainerReport from './ContainerReport';
 import ShipmentOrders from './ShipmentOrders';
 import OceanShippers from './OceanShippers';
+import ComingProducts from './ComingProducts';
+import ComingContainers from './ComingContainers';
 import './Containers.css';
 
 export default function Containers({ currentUser, isActive }) {
@@ -12,6 +14,8 @@ export default function Containers({ currentUser, isActive }) {
         if (p.containerDashboard?.read) return 'report';
         if (p.shipmentOrders?.read) return 'shipments';
         if (p.containerList?.read) return 'list';
+        if (p.comingProducts?.read || p.admin) return 'coming_products';
+        if (p.comingContainer?.read || p.admin) return 'coming_containers';
         if (p.shippers?.read) return 'shipper';
         if (p.oceanShippers?.read ?? p.admin ?? p.shippers?.read) return 'ocean_shipper';
         return '';
@@ -58,6 +62,22 @@ export default function Containers({ currentUser, isActive }) {
                         Container List
                     </button>
                 )}
+                {(p.comingProducts?.read || p.admin) && (
+                    <button
+                        className={`subnav-btn ${subTab === 'coming_products' ? 'active' : ''}`}
+                        onClick={() => setSubTab('coming_products')}
+                    >
+                        Coming Products
+                    </button>
+                )}
+                {(p.comingContainer?.read || p.admin) && (
+                    <button
+                        className={`subnav-btn ${subTab === 'coming_containers' ? 'active' : ''}`}
+                        onClick={() => setSubTab('coming_containers')}
+                    >
+                        Coming Container
+                    </button>
+                )}
                 {p.shippers?.read && (
                     <button
                         className={`subnav-btn ${subTab === 'shipper' ? 'active' : ''}`}
@@ -82,6 +102,12 @@ export default function Containers({ currentUser, isActive }) {
                 </div>
                 <div style={{ display: subTab === 'list' ? 'flex' : 'none', flex: 1 }}>
                     <ContainerList currentUser={currentUser} onNavigateToShipment={handleNavigateToShipment} isActive={isActive && subTab === 'list'} />
+                </div>
+                <div style={{ display: subTab === 'coming_products' ? 'flex' : 'none', flex: 1 }}>
+                    <ComingProducts currentUser={currentUser} isActive={isActive && subTab === 'coming_products'} />
+                </div>
+                <div style={{ display: subTab === 'coming_containers' ? 'flex' : 'none', flex: 1 }}>
+                    <ComingContainers currentUser={currentUser} isActive={isActive && subTab === 'coming_containers'} />
                 </div>
                 <div style={{ display: subTab === 'report' ? 'flex' : 'none', flex: 1 }}>
                     <ContainerReport currentUser={currentUser} onNavigateToShipment={handleNavigateToShipment} isActive={isActive && subTab === 'report'} />

@@ -1,3 +1,4 @@
+import { getLocalTodayStrSync, getLocalStrFromDate } from '../utils/timezone';
 import { useState, useEffect } from 'react';
 import { getDb } from '../db/Database';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Cell } from 'recharts';
@@ -6,12 +7,13 @@ import ContainerModal from './ContainerModal';
 import './Containers.css';
 
 export default function ContainerReport({ currentUser, onNavigateToShipment, isActive }) {
-    const [chartData, setChartData] = useState({ monthlyArrivals: [], originStats: [], shipperStats: [] });
+    const [chartData, setChartData] = useState({ monthlyArrivals: [], originStats: [], shipperStats: [], forwarderStats: [] });
     const [lists, setLists] = useState({
         delayed: [],
         inTransit: [],
         arrivedThisMonth: [],
-        unpaid: []
+        unpaid: [],
+        pendingDocs: []
     });
     const [loadError, setLoadError] = useState(null);
     const [loading, setLoading] = useState(true);
@@ -20,6 +22,7 @@ export default function ContainerReport({ currentUser, onNavigateToShipment, isA
     const [shippersMap, setShippersMap] = useState({});
     const [inventoryMap, setInventoryMap] = useState({});
     const [shipmentsMap, setShipmentsMap] = useState({});
+    const [forwardersMap, setForwardersMap] = useState({});
 
     const currentYear = new Date().getFullYear();
     const [chart1Dates, setChart1Dates] = useState({ start: `${currentYear}-01-01`, end: `${currentYear}-12-31` });
@@ -39,19 +42,20 @@ export default function ContainerReport({ currentUser, onNavigateToShipment, isA
 
     useEffect(() => {
         if (allContainers.length > 0) {
-            calculateChartData(allContainers, chart1Dates, chart2Dates, chart3Dates, shippersMap, shipmentsMap);
+            calculateChartData(allContainers, chart1Dates, chart2Dates, chart3Dates, shippersMap, shipmentsMap, forwardersMap);
         }
-    }, [allContainers, chart1Dates, chart2Dates, chart3Dates, shippersMap, shipmentsMap]);
+    }, [allContainers, chart1Dates, chart2Dates, chart3Dates, shippersMap, shipmentsMap, forwardersMap]);
 
     const loadData = async () => {
         setLoading(true);
         try {
             const db = await getDb();
-            const [containers, shippers, inventory, shipments] = await Promise.all([
+            const [containers, shippers, inventory, shipments, oceanShippers] = await Promise.all([
                 db.select('SELECT * FROM containers'),
                 db.select('SELECT * FROM shippers'),
                 db.select('SELECT * FROM inventory'),
-                db.select('SELECT * FROM shipments')
+                db.select('SELECT * FROM shipments'),
+                db.select('SELECT * FROM ocean_shippers')
             ]);
 
             const sMap = {};
@@ -66,9 +70,17 @@ export default function ContainerReport({ currentUser, onNavigateToShipment, isA
             inventory.forEach(i => iMap[i.product_id] = i);
             setInventoryMap(iMap);
 
+
             const smMap = {};
             shipments.forEach(s => smMap[s.shipment_id] = s);
             setShipmentsMap(smMap);
+
+            const fMap = {};
+            if (oceanShippers) {
+                oceanShippers.forEach(os => fMap[os.ocean_shipper_id] = os);
+            }
+            setForwardersMap(fMap);
+
 
             setAllContainers(containers);
             calculateChartData(containers, chart1Dates, chart2Dates, chart3Dates, sMap, smMap);
@@ -76,13 +88,13 @@ export default function ContainerReport({ currentUser, onNavigateToShipment, isA
             setLoadError(null);
         } catch (e) {
             console.error("Failed to load container data for report", e);
-            setLoadError(e.toString() + "\n" + (e.stack || ""));
+            setLoadError(e.toString() + "\\n" + (e.stack || ""));
         } finally {
             setLoading(false);
         }
     };
 
-    const calculateChartData = (containers, dates1, dates2, dates3, sMap = shippersMap, smMap = shipmentsMap) => {
+    const calculateChartData = (containers, dates1, dates2, dates3, sMap = shippersMap, smMap = shipmentsMap, fMap = forwardersMap) => {
         const arrived = containers.filter(c => c.track_status && (c.track_status.toLowerCase() === 'delivered' || c.track_status.toLowerCase() === 'empty returned'));
 
         const monthMap = {};
@@ -145,9 +157,11 @@ export default function ContainerReport({ currentUser, onNavigateToShipment, isA
         const start3 = new Date(dates3.start);
         const end3 = new Date(dates3.end);
         let shipperStats = [];
+        let forwarderStats = [];
 
         if (!isNaN(start3) && !isNaN(end3)) {
             const shipperCounts = {};
+            const forwarderCounts = {};
             containers.forEach(c => {
                 const dateStr = c.delivery || c.eta || c.etd;
                 if (!dateStr) return;
@@ -178,8 +192,20 @@ export default function ContainerReport({ currentUser, onNavigateToShipment, isA
                         const sName = sMap[sId]?.shipper_name || sMap[sId]?.name || sId;
                         shipperCounts[sName] = (shipperCounts[sName] || 0) + 1;
                     });
+
+                    if (c.ocean_shipper) {
+                        const fName = fMap[c.ocean_shipper]?.ocean_shipper_name || c.ocean_shipper;
+                        forwarderCounts[fName] = (forwarderCounts[fName] || 0) + 1;
+                    }
                 }
             });
+
+            if (Object.keys(forwarderCounts).length > 0) {
+                forwarderStats = Object.keys(forwarderCounts).map(name => ({
+                    name,
+                    Count: forwarderCounts[name]
+                })).sort((a, b) => b.Count - a.Count).slice(0, 5);
+            }
 
             shipperStats = Object.keys(shipperCounts).map(name => ({
                 name,
@@ -187,13 +213,13 @@ export default function ContainerReport({ currentUser, onNavigateToShipment, isA
             })).sort((a, b) => b.Count - a.Count).slice(0, 5);
         }
 
-        setChartData({ monthlyArrivals, originStats, shipperStats });
+        setChartData({ monthlyArrivals, originStats, shipperStats, forwarderStats });
     };
 
     const calculateLists = (containers, sMap, shipmentsData = []) => {
-        const todayStr = new Date().toISOString().split('T')[0];
+        const todayStr = getLocalTodayStrSync();
         const now = new Date();
-        const firstDayOfMonth = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().split('T')[0];
+        const firstDayOfMonth = getLocalStrFromDate(new Date(now.getFullYear(), now.getMonth(), 1));
 
         const soMap = {};
         shipmentsData.forEach(s => soMap[s.shipment_id] = s);
@@ -263,7 +289,7 @@ export default function ContainerReport({ currentUser, onNavigateToShipment, isA
                             const etdDateObj = new Date(c.etd);
                             if (!isNaN(etdDateObj)) {
                                 etdDateObj.setUTCDate(etdDateObj.getUTCDate() + Number(paymentPeriod));
-                                const overdueDateStr = etdDateObj.toISOString().split('T')[0];
+                                const overdueDateStr = getLocalStrFromDate(etdDateObj);
                                 if (todayStr > overdueDateStr) {
                                     isOverdue = true;
                                 }
@@ -367,7 +393,7 @@ export default function ContainerReport({ currentUser, onNavigateToShipment, isA
                 )}
 
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: '24px' }}>
-                    {renderList('Docs Not Ready', ['Container No', 'ETD Date'], lists.pendingDocs, (item) => (
+                    {renderList('Docs Not Ready', ['Container No', 'ETA'], lists.pendingDocs, (item) => (
                         <>
                             <td style={{ width: '50%', padding: '8px' }}>
                                 <div style={{ fontSize: '0.85rem', fontWeight: 500, color: '#1e293b' }}>{item.cntr_no || 'Unknown'}</div>
@@ -403,7 +429,7 @@ export default function ContainerReport({ currentUser, onNavigateToShipment, isA
                         </>
                     ))}
 
-                    {renderList('Unpaid Containers', ['Container', 'ETD', 'Status'], lists.unpaid, (item) => (
+                    {renderList('Unpaid & Overdue', ['Container', 'ETA', 'Status'], lists.unpaid, (item) => (
                         <>
                             <td style={{ width: '40%', padding: '8px' }}>
                                 <div style={{ fontSize: '0.85rem', fontWeight: 500, cursor: 'pointer' }}>{item.name}</div>
@@ -482,30 +508,58 @@ export default function ContainerReport({ currentUser, onNavigateToShipment, isA
                         </ResponsiveContainer>
                     </div>
 
-                    <div style={{ background: 'white', padding: '24px', borderRadius: '8px', boxShadow: '0 1px 3px rgba(0,0,0,0.1)', border: '1px solid var(--border-color)', gridColumn: '1 / -1' }}>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' }}>
-                            <h3 style={{ margin: 0, color: '#475569', fontSize: '1rem', fontWeight: '600' }}>
-                                Top 5 Shippers by Container Volume ({chartData.shipperStats?.reduce((sum, item) => sum + (item.Count || 0), 0) || 0})
-                            </h3>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                                <input type="date" value={chart3Dates.start} onChange={e => setChart3Dates(p => ({ ...p, start: e.target.value }))} style={{ padding: '4px', fontSize: '0.8rem', border: '1px solid #cbd5e1', borderRadius: '4px' }} />
-                                <span>-</span>
-                                <input type="date" value={chart3Dates.end} onChange={e => setChart3Dates(p => ({ ...p, end: e.target.value }))} style={{ padding: '4px', fontSize: '0.8rem', border: '1px solid #cbd5e1', borderRadius: '4px' }} />
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '24px', gridColumn: '1 / -1' }}>
+                        <div style={{ background: 'white', padding: '24px', borderRadius: '8px', boxShadow: '0 1px 3px rgba(0,0,0,0.1)', border: '1px solid var(--border-color)' }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' }}>
+                                <h3 style={{ margin: 0, color: '#475569', fontSize: '1rem', fontWeight: '600' }}>
+                                    Top 5 Shippers by Container Volume ({chartData.shipperStats?.reduce((sum, item) => sum + (item.Count || 0), 0) || 0})
+                                </h3>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                    <input type="date" value={chart3Dates.start} onChange={e => setChart3Dates(p => ({ ...p, start: e.target.value }))} style={{ padding: '4px', fontSize: '0.8rem', border: '1px solid #cbd5e1', borderRadius: '4px' }} />
+                                    <span>-</span>
+                                    <input type="date" value={chart3Dates.end} onChange={e => setChart3Dates(p => ({ ...p, end: e.target.value }))} style={{ padding: '4px', fontSize: '0.8rem', border: '1px solid #cbd5e1', borderRadius: '4px' }} />
+                                </div>
                             </div>
+                            <ResponsiveContainer width="100%" height={250}>
+                                <BarChart data={chartData.shipperStats} margin={{ top: 5, right: 20, left: 0, bottom: 5 }}>
+                                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
+                                    <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{ fill: '#64748b', fontSize: 12 }} />
+                                    <YAxis axisLine={false} tickLine={false} tick={{ fill: '#64748b', fontSize: 12 }} />
+                                    <Tooltip cursor={{ fill: '#f1f5f9' }} contentStyle={{ borderRadius: '8px', border: 'none', boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1)' }} />
+                                    <Bar dataKey="Count" fill="#10b981" radius={[4, 4, 0, 0]} maxBarSize={50}>
+                                        {chartData.shipperStats && chartData.shipperStats.map((entry, index) => (
+                                            <Cell key={`cell-${index}`} fill={index % 2 === 0 ? '#34d399' : '#10b981'} />
+                                        ))}
+                                    </Bar>
+                                </BarChart>
+                            </ResponsiveContainer>
                         </div>
-                        <ResponsiveContainer width="100%" height={250}>
-                            <BarChart data={chartData.shipperStats} margin={{ top: 5, right: 20, left: 0, bottom: 5 }}>
-                                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
-                                <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{ fill: '#64748b', fontSize: 12 }} />
-                                <YAxis axisLine={false} tickLine={false} tick={{ fill: '#64748b', fontSize: 12 }} />
-                                <Tooltip cursor={{ fill: '#f1f5f9' }} contentStyle={{ borderRadius: '8px', border: 'none', boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1)' }} />
-                                <Bar dataKey="Count" fill="#10b981" radius={[4, 4, 0, 0]} maxBarSize={50}>
-                                    {chartData.shipperStats && chartData.shipperStats.map((entry, index) => (
-                                        <Cell key={`cell-${index}`} fill={index % 2 === 0 ? '#34d399' : '#10b981'} />
-                                    ))}
-                                </Bar>
-                            </BarChart>
-                        </ResponsiveContainer>
+
+                        <div style={{ background: 'white', padding: '24px', borderRadius: '8px', boxShadow: '0 1px 3px rgba(0,0,0,0.1)', border: '1px solid var(--border-color)' }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' }}>
+                                <h3 style={{ margin: 0, color: '#475569', fontSize: '1rem', fontWeight: '600' }}>
+                                    Top 5 Forwarders by Container Volume ({chartData.forwarderStats?.reduce((sum, item) => sum + (item.Count || 0), 0) || 0})
+                                </h3>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                    <input type="date" value={chart3Dates.start} onChange={e => setChart3Dates(p => ({ ...p, start: e.target.value }))} style={{ padding: '4px', fontSize: '0.8rem', border: '1px solid #cbd5e1', borderRadius: '4px' }} />
+                                    <span>-</span>
+                                    <input type="date" value={chart3Dates.end} onChange={e => setChart3Dates(p => ({ ...p, end: e.target.value }))} style={{ padding: '4px', fontSize: '0.8rem', border: '1px solid #cbd5e1', borderRadius: '4px' }} />
+                                </div>
+                            </div>
+                            <ResponsiveContainer width="100%" height={250}>
+                                <BarChart data={chartData.forwarderStats} margin={{ top: 5, right: 20, left: 0, bottom: 5 }}>
+                                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
+                                    <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{ fill: '#64748b', fontSize: 12 }} />
+                                    <YAxis axisLine={false} tickLine={false} tick={{ fill: '#64748b', fontSize: 12 }} />
+                                    <Tooltip cursor={{ fill: '#f1f5f9' }} contentStyle={{ borderRadius: '8px', border: 'none', boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1)' }} />
+                                    <Bar dataKey="Count" fill="#3b82f6" radius={[4, 4, 0, 0]} maxBarSize={50}>
+                                        {chartData.forwarderStats && chartData.forwarderStats.map((entry, index) => (
+                                            <Cell key={`cell-${index}`} fill={index % 2 === 0 ? '#60a5fa' : '#3b82f6'} />
+                                        ))}
+                                    </Bar>
+                                </BarChart>
+                            </ResponsiveContainer>
+                        </div>
                     </div>
                 </div>
 

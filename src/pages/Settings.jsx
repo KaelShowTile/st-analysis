@@ -16,6 +16,7 @@ export default function Settings({ currentUser }) {
     const [isRestoring, setIsRestoring] = useState(false);
     const [currentDbPath, setCurrentDbPath] = useState('');
     const [maxContainerTracking, setMaxContainerTracking] = useState(50);
+    const [timezone, setTimezone] = useState(Intl.DateTimeFormat().resolvedOptions().timeZone);
     const [findTeuApi, setFindTeuApi] = useState('https://findteu.showtile-apis.workers.dev/api');
     const [findTeuApiKey, setFindTeuApiKey] = useState('TAURI_API_KEY');
     const [printColsContainer, setPrintColsContainer] = useState(['cntr_no', 'hbl_no', 'shipper', 'invoice_no', 'payment', 'doc', 'contents', 'tracking', 'pol', 'etd', 'eta', 'original_eta', 'delivery', 'info', 'last_free_dtn']);
@@ -36,7 +37,9 @@ export default function Settings({ currentUser }) {
             shipmentOrders: { read: false, write: false },
             containerList: { read: false, write: false },
             shippers: { read: false, write: false },
-            oceanShippers: { read: false, write: false }
+            oceanShippers: { read: false, write: false },
+            comingProducts: { read: false, write: false },
+            comingContainer: { read: false, write: false }
         }
     });
 
@@ -66,6 +69,11 @@ export default function Settings({ currentUser }) {
         } catch (err) {
             console.error("Failed to save max tracking limit", err);
         }
+    };
+
+    const handleSaveTimezone = async () => {
+        await setSetting('timezone', timezone);
+        alert("Timezone settings saved successfully.");
     };
 
     const handleSaveFindTeuSettings = async () => {
@@ -213,8 +221,10 @@ export default function Settings({ currentUser }) {
     const loadDbSettings = async () => {
         const url = await getSetting('findteu_api_url', 'https://findteu.showtile-apis.workers.dev/api');
         const key = await getSetting('findteu_api_key', 'TAURI_API_KEY');
+        const tz = await getSetting('timezone', Intl.DateTimeFormat().resolvedOptions().timeZone);
         setFindTeuApi(url);
         setFindTeuApiKey(key);
+        setTimezone(tz);
 
         const pcStr = await getSetting('print_cols_container', '');
         if (pcStr) {
@@ -507,6 +517,27 @@ export default function Settings({ currentUser }) {
                     </div>
                 </div>
 
+                <div className="attribute-item" style={{ display: 'flex', justifyContent: 'space-between', padding: '12px 16px', background: 'var(--surface-color)', borderRadius: '6px', border: '1px solid var(--border-color)', alignItems: 'center', marginTop: '12px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flex: 1, overflow: 'hidden' }}>
+                        <div style={{ fontWeight: 500 }}>System Timezone</div>
+                    </div>
+                    <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                        <select 
+                            className="form-input" 
+                            style={{ margin: 0, padding: '6px' }}
+                            value={timezone}
+                            onChange={(e) => setTimezone(e.target.value)}
+                        >
+                            {Intl.supportedValuesOf('timeZone').map(tz => (
+                                <option key={tz} value={tz}>{tz}</option>
+                            ))}
+                        </select>
+                        <button onClick={handleSaveTimezone} className="btn-primary" style={{ flexShrink: 0 }}>
+                            Save
+                        </button>
+                    </div>
+                </div>
+
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '16px', marginTop: '12px' }}>
                     <div>
                         <label className="form-label" style={{ fontWeight: 'bold' }}>FindTEU API URL</label>
@@ -607,6 +638,9 @@ export default function Settings({ currentUser }) {
                                     shipmentOrders: { read: false, write: false },
                                     containerList: { read: false, write: false },
                                     shippers: { read: false, write: false },
+                                    oceanShippers: { read: false, write: false },
+                                    comingProducts: { read: false, write: false },
+                                    comingContainer: { read: false, write: false },
                                     admin: false
                                 }
                             });
@@ -644,6 +678,8 @@ export default function Settings({ currentUser }) {
                                                 containerList: { read: false, write: false },
                                                 shippers: { read: false, write: false },
                                                 oceanShippers: { read: false, write: false },
+                                                comingProducts: { read: false, write: false },
+                                                comingContainer: { read: false, write: false },
                                                 admin: false,
                                                 ...u.permissions
                                             }
@@ -752,7 +788,7 @@ export default function Settings({ currentUser }) {
                                 {editingUserId === 1 && <p style={{ fontSize: '0.8rem', color: '#ef4444', marginTop: '8px' }}>Admin permissions cannot be modified.</p>}
                             </div>
 
-                            <button className="btn-primary" onClick={handleSaveUser} style={{ width: '100%', marginTop: '16px' }}>
+                            <button className="btn-primary" onClick={handleSaveUser} style={{ width: '100%', marginTop: '16px', textAlign: 'center', display: 'inline-block' }}>
                                 Save User
                             </button>
                         </div>

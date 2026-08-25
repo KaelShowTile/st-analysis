@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Home, LayoutDashboard, Settings as SettingsIcon, Sun, Moon, Receipt, BarChart2, LogOut, Box } from 'lucide-react';
-import { getDb, getDbPath } from './db/Database';
+import { getDb, getDbPath, getSetting } from './db/Database';
 import { appDataDir, join, dirname } from '@tauri-apps/api/path';
 import { copyFile, mkdir, readDir, remove, exists } from '@tauri-apps/plugin-fs';
 import './App.css';
@@ -84,6 +84,11 @@ function App() {
             }
         }
 
+        try {
+            const tz = await getSetting('timezone');
+            if (tz) window.__USER_TZ__ = tz;
+        } catch(e) {}
+
         setDbReady(true);
       } catch (err) {
         console.error("Failed to initialize DB:", err);
@@ -161,7 +166,7 @@ function App() {
                   Reports
                 </li>
             )}
-            {(p.containerDashboard?.read || p.shipmentOrders?.read || p.containerList?.read || p.shippers?.read) && (
+            {(p.containerDashboard?.read || p.shipmentOrders?.read || p.containerList?.read || p.shippers?.read || p.comingProducts?.read || p.comingContainer?.read) && (
                 <li className={`nav-item ${activeTab === 'containers' ? 'active' : ''}`} onClick={() => navigateTo('containers')}>
                   <Box size={18} />
                   Containers
@@ -207,7 +212,7 @@ function App() {
               <Reports currentUser={currentUser} initialReportId={selectedReportId} isActive={activeTab === 'reports'} />
             </div>
           )}
-          {(p.containerDashboard?.read || p.shipmentOrders?.read || p.containerList?.read || p.shippers?.read) && (
+          {(p.containerDashboard?.read || p.shipmentOrders?.read || p.containerList?.read || p.shippers?.read || p.comingProducts?.read || p.comingContainer?.read) && (
             <div style={{ display: activeTab === 'containers' ? 'block' : 'none', height: '100%' }}>
               <Containers currentUser={currentUser} isActive={activeTab === 'containers'} />
             </div>

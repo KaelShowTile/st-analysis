@@ -1,3 +1,16 @@
+import { getSetting } from '../db/Database';
+
+export const getLocalTodayStr = async () => {
+    let tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    try {
+        const storedTz = await getSetting('timezone');
+        if (storedTz) {
+            tz = storedTz;
+        }
+    } catch(e) {}
+    return new Date().toLocaleDateString('en-CA', { timeZone: tz });
+};
+
 export const toDateInt = (dateStr) => {
     if (!dateStr) return 0;
     const s = String(dateStr).trim().split(' ')[0];

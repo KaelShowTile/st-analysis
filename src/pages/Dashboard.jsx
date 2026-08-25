@@ -1,3 +1,4 @@
+import { getLocalTodayStrSync, getLocalStrFromDate } from '../utils/timezone';
 import { useEffect, useState } from 'react';
 import { getDb } from '../db/Database';
 import { getCellCalculations } from '../utils/calculations';
@@ -51,7 +52,7 @@ export default function Dashboard({ currentUser, onNavigate, isActive }) {
                 if (!startDate && report.end_date) {
                     const ed = new Date(report.end_date);
                     ed.setDate(ed.getDate() - 30);
-                    startDate = ed.toISOString().split('T')[0];
+                    startDate = getLocalStrFromDate(ed);
                 }
 
                 parsedData.finishes.forEach(finish => {

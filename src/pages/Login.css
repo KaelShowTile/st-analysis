@@ -84,3 +84,51 @@
     border-radius: 4px;
     border: 1px solid #fca5a5;
 }
+
+.login-db-section {
+    margin-top: 32px;
+    padding-top: 24px;
+    border-top: 1px solid var(--border-color);
+    text-align: left;
+}
+
+.login-db-header {
+    margin-bottom: 12px;
+    color: var(--text-color);
+}
+
+.login-db-info {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    background: var(--bg-color);
+    padding: 10px 12px;
+    border-radius: 6px;
+    border: 1px solid var(--border-color);
+}
+
+.login-db-path {
+    font-size: 12px;
+    color: #64748b;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 200px;
+}
+
+.login-db-btn {
+    padding: 6px 12px;
+    background: transparent;
+    color: var(--primary-color);
+    border: 1px solid var(--primary-color);
+    border-radius: 4px;
+    font-size: 12px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.login-db-btn:hover {
+    background: var(--primary-color);
+    color: white;
+}

@@ -146,7 +146,14 @@ export default function ContainerModal({ record, year, onClose, onSave }) {
     const getShipmentProducts = (shipmentId) => {
         const shp = openShipments.find(s => s.shipment_id.toString() === shipmentId.toString());
         if (!shp || !shp.products) return [];
-        const prodIds = shp.products.split(',');
+        let prodIds = [];
+        if (shp.products.startsWith('[')) {
+            try {
+                prodIds = JSON.parse(shp.products).map(p => p.id.toString());
+            } catch(e) {}
+        } else {
+            prodIds = shp.products.split(',');
+        }
         return inventory.filter(i => prodIds.includes(i.product_id.toString()));
     };
 

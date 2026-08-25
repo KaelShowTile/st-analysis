@@ -32,7 +32,7 @@ export default function ShipperList({ currentUser, isActive }) {
         if (!canWrite) return;
         try {
             const db = await getDb();
-            await db.execute('INSERT INTO shippers (shipper_name, payment_term, payment_period, deposit) VALUES ($1, $2, $3, $4)', ['', '', 0, 0]);
+            await db.execute('INSERT INTO shippers (shipper_name, contact_name, contact_number, payment_term, payment_period, deposit) VALUES ($1, $2, $3, $4, $5, $6)', ['', '', '', '', 0, 0]);
             loadRecords();
         } catch (e) {
             console.error('Failed to add shipper', e);
@@ -94,6 +94,8 @@ export default function ShipperList({ currentUser, isActive }) {
                                 <tr>
                                     <th style={{ width: '60px', minWidth: '60px' }}>ID</th>
                                     <th style={{ width: '250px', minWidth: '250px' }}>Shipper Name</th>
+                                    <th style={{ width: '200px', minWidth: '200px' }}>Contact Name</th>
+                                    <th style={{ width: '200px', minWidth: '200px' }}>Contact Number</th>
                                     <th style={{ width: '200px', minWidth: '200px' }}>Payment Term</th>
                                     <th style={{ width: '150px', minWidth: '150px' }}>Payment Period (Days)</th>
                                     <th style={{ width: '120px', minWidth: '120px' }}>Deposit (%)</th>
@@ -103,7 +105,7 @@ export default function ShipperList({ currentUser, isActive }) {
                             <tbody>
                                 {records.length === 0 ? (
                                     <tr>
-                                        <td colSpan={canWrite ? 6 : 5} style={{ textAlign: 'center', padding: '32px', color: '#94a3b8' }}>
+                                        <td colSpan={canWrite ? 8 : 7} style={{ textAlign: 'center', padding: '32px', color: '#94a3b8' }}>
                                             No shippers found.
                                         </td>
                                     </tr>
@@ -123,6 +125,36 @@ export default function ShipperList({ currentUser, isActive }) {
                                                     onBlur={(e) => {
                                                         if (e.target.dataset.initial !== e.target.value) {
                                                             handleCellBlur(row, 'shipper_name', e.target.value);
+                                                        }
+                                                    }}
+                                                    disabled={!canWrite}
+                                                />
+                                            </td>
+                                            <td style={{ width: '200px', minWidth: '200px' }}>
+                                                <input
+                                                    type="text"
+                                                    className="excel-input"
+                                                    value={row.contact_name || ''}
+                                                    onChange={(e) => handleCellChange(row.shipper_id, 'contact_name', e.target.value)}
+                                                    onFocus={(e) => { e.target.dataset.initial = e.target.value; }}
+                                                    onBlur={(e) => {
+                                                        if (e.target.dataset.initial !== e.target.value) {
+                                                            handleCellBlur(row, 'contact_name', e.target.value);
+                                                        }
+                                                    }}
+                                                    disabled={!canWrite}
+                                                />
+                                            </td>
+                                            <td style={{ width: '200px', minWidth: '200px' }}>
+                                                <input
+                                                    type="text"
+                                                    className="excel-input"
+                                                    value={row.contact_number || ''}
+                                                    onChange={(e) => handleCellChange(row.shipper_id, 'contact_number', e.target.value)}
+                                                    onFocus={(e) => { e.target.dataset.initial = e.target.value; }}
+                                                    onBlur={(e) => {
+                                                        if (e.target.dataset.initial !== e.target.value) {
+                                                            handleCellBlur(row, 'contact_number', e.target.value);
                                                         }
                                                     }}
                                                     disabled={!canWrite}

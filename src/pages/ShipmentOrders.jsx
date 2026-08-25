@@ -1,3 +1,4 @@
+import { getLocalTodayStrSync, getLocalStrFromDate } from '../utils/timezone';
 import { useState, useEffect } from 'react';
 import { getDb, getSetting } from '../db/Database';
 import { Plus, Edit, Trash2, Search, Check, ChevronUp, ChevronDown, ListFilter, XCircle, Printer, Download } from 'lucide-react';
@@ -85,7 +86,26 @@ export default function ShipmentOrders({ currentUser, initialEditId, onClearEdit
         try {
             const db = await getDb();
             const res = await db.select('SELECT * FROM shipments ORDER BY shipment_id DESC');
-            setOrders(res);
+            const cntrs = await db.select('SELECT contents FROM containers');
+            const containerizedMap = {};
+            for (const c of cntrs) {
+                try {
+                    const parsed = JSON.parse(c.contents || '[]');
+                    for (const block of parsed) {
+                        if (block.shipment_id) {
+                            if (!containerizedMap[block.shipment_id]) containerizedMap[block.shipment_id] = new Set();
+                            if (block.products) {
+                                block.products.forEach(p => containerizedMap[block.shipment_id].add(p.product_id.toString()));
+                            }
+                        }
+                    }
+                } catch (e) {}
+            }
+            const enriched = res.map(o => ({
+                ...o,
+                containerized_products: Array.from(containerizedMap[o.shipment_id] || [])
+            }));
+            setOrders(enriched);
         } catch (e) {
             console.error("Failed to load orders", e);
         }
@@ -109,21 +129,13 @@ export default function ShipmentOrders({ currentUser, initialEditId, onClearEdit
         if (searchProducts) {
             const lowerSearch = searchProducts.toLowerCase();
             result = result.filter(o => {
-                const prodIds = o.products ? o.products.split(',') : [];
-                for (let pid of prodIds) {
-                    const invItem = inventory.find(i => i.product_id == pid);
-                    if (invItem) {
-                        const sDesc = invItem.sales_description || '';
-                        const sSku = invItem.sku || '';
-                        if (sDesc.toLowerCase().includes(lowerSearch) || sSku.toLowerCase().includes(lowerSearch)) {
-                            return true;
-                        }
-                    }
-                }
+                const prodList = getProductsList(o.products);
+                if (prodList.some(p => p.name.toLowerCase().includes(lowerSearch))) return true;
+
                 const invNo = o.invoice_no || '';
-                if (invNo.toLowerCase().includes(lowerSearch)) {
-                    return true;
-                }
+                const hblNo = o.hbl_no || '';
+                if (invNo.toLowerCase().includes(lowerSearch)) return true;
+                if (hblNo.toLowerCase().includes(lowerSearch)) return true;
                 return false;
             });
         }
@@ -135,12 +147,21 @@ export default function ShipmentOrders({ currentUser, initialEditId, onClearEdit
         return s ? s.shipper_name : shipperId;
     };
 
-    const getProductNames = (productIdsStr) => {
+    const getProductsList = (productIdsStr) => {
         if (!productIdsStr) return [];
+        if (productIdsStr.startsWith('[')) {
+            try {
+                const arr = JSON.parse(productIdsStr);
+                return arr.map(item => ({ id: item.id.toString(), name: item.name }));
+            } catch (e) { }
+        }
         const ids = productIdsStr.split(',');
         return ids.map(id => {
             const item = inventory.find(i => i.product_id == id);
-            return item ? `${item.sku || 'No SKU'} - ${item.sales_description || ''}` : `[ID: ${id}]`;
+            return {
+                id: id.toString(),
+                name: item ? `${item.sku || 'No SKU'} - ${item.sales_description || ''}` : `[ID: ${id}]`
+            };
         });
     };
 
@@ -167,7 +188,14 @@ export default function ShipmentOrders({ currentUser, initialEditId, onClearEdit
 
         try {
             const db = await getDb();
-            const prodStr = formData.products.join(',');
+            const prodData = formData.products.map(id => {
+                const item = inventory.find(i => i.product_id.toString() === id);
+                return {
+                    id,
+                    name: item ? `${item.sku || 'No SKU'} - ${item.sales_description || ''}` : `[ID: ${id}]`
+                };
+            });
+            const prodStr = JSON.stringify(prodData);
 
             const selectedShipper = shippers.find(s => s.shipper_id == formData.shipper);
             const depositRate = selectedShipper ? (selectedShipper.deposit || 0) : 0;
@@ -226,10 +254,22 @@ export default function ShipmentOrders({ currentUser, initialEditId, onClearEdit
     const handleEditClick = (order) => {
         setFormMode('edit');
         setEditingId(order.shipment_id);
+        
+        let parsedProducts = [];
+        if (order.products) {
+            if (order.products.startsWith('[')) {
+                try {
+                    parsedProducts = JSON.parse(order.products).map(p => p.id.toString());
+                } catch(e) {}
+            } else {
+                parsedProducts = order.products.split(',');
+            }
+        }
+
         setFormData({
             invoice_no: order.invoice_no || '',
             shipper: order.shipper || '',
-            products: order.products ? order.products.split(',') : [],
+            products: parsedProducts,
             est_date: order.est_date || '',
             note: order.note || '',
             status: order.status || 'open',
@@ -379,7 +419,7 @@ export default function ShipmentOrders({ currentUser, initialEditId, onClearEdit
                 if (col === 'shipper_name') {
                     htmlRows += `<td>${getShipperName(order.shipper)}</td>`;
                 } else if (col === 'products') {
-                    htmlRows += `<td>${getProductNames(order.products).join('<br/>')}</td>`;
+                htmlRows += `<td>${getProductsList(order.products).map(p => p.name).join('<br/>')}</td>`;
                 } else if (col === 'deposit') {
                     htmlRows += `<td>${dRate}%: ${order.deposit != null ? 'Paid' : 'Pending'}${order.payment_date && order.deposit != null ? `<br/>Date: ${order.payment_date}` : ''}</td>`;
                 } else if (col === 'balance') {
@@ -412,7 +452,7 @@ export default function ShipmentOrders({ currentUser, initialEditId, onClearEdit
     .report-table th { background: #f8fafc; font-weight: bold; color: #475569; }
     @media print {
         body { padding: 0; margin: 0; }
-        @page { size: landscape; margin: 10mm; }
+        @page { margin: 10mm; }
     }
 </style>
 </head>
@@ -622,21 +662,23 @@ export default function ShipmentOrders({ currentUser, initialEditId, onClearEdit
                                                 })()}
                                             </td>}
                                             {visibleColumns.includes('products') && <td>
-                                                <div className="readonly-cell" style={{ display: 'flex', flexDirection: 'column', gap: '4px', fontSize: '0.85rem' }}>
-                                                    {getProductNames(order.products).map((pname, idx) => (
-                                                        <div key={idx} style={{
-                                                            backgroundColor: '#f1f5f9',
-                                                            padding: '2px 6px',
-                                                            borderRadius: '4px',
-                                                            whiteSpace: 'nowrap',
-                                                            overflow: 'hidden',
-                                                            textOverflow: 'ellipsis'
-                                                        }}>
-                                                            {pname}
-                                                        </div>
-                                                    ))}
-                                                </div>
-                                            </td>}
+                                <div className="readonly-cell" style={{ display: 'flex', flexDirection: 'column', gap: '4px', fontSize: '0.85rem' }}>
+                                    {getProductsList(order.products).map((prod, idx) => {
+                                        const isContainerized = order.containerized_products?.includes(prod.id);
+                                        return (
+                                        <div key={idx} style={{
+                                            backgroundColor: isContainerized ? '#fef08a' : '#f1f5f9',
+                                            padding: '2px 6px',
+                                            borderRadius: '4px',
+                                            whiteSpace: 'nowrap',
+                                            overflow: 'hidden',
+                                            textOverflow: 'ellipsis'
+                                        }}>
+                                            {prod.name}
+                                        </div>
+                                    )})}
+                                </div>
+                            </td>}
                                             {visibleColumns.includes('est_date') && <td><div className="readonly-cell">{order.est_date}</div></td>}
                                             {visibleColumns.includes('note') && <td>
                                                 <div className="readonly-cell" style={{ whiteSpace: 'pre-wrap', fontSize: '0.85rem', color: '#475569' }}>
@@ -777,7 +819,7 @@ export default function ShipmentOrders({ currentUser, initialEditId, onClearEdit
                                                         let pd = p.payment_date;
                                                         if (rate === 100) {
                                                             bp = checked;
-                                                            pd = (checked && !pd) ? new Date().toISOString().split('T')[0] : (checked ? pd : '');
+                                                            pd = (checked && !pd) ? getLocalTodayStrSync() : (checked ? pd : '');
                                                         }
                                                         return { ...p, depositPaid: checked, balancePaid: bp, payment_date: pd };
                                                     });
@@ -803,7 +845,7 @@ export default function ShipmentOrders({ currentUser, initialEditId, onClearEdit
                                                                 setFormData(p => ({
                                                                     ...p,
                                                                     balancePaid: checked,
-                                                                    payment_date: (checked && p.depositPaid && !p.payment_date) ? new Date().toISOString().split('T')[0] : p.payment_date
+                                                                    payment_date: (checked && p.depositPaid && !p.payment_date) ? getLocalTodayStrSync() : p.payment_date
                                                                 }));
                                                             }}
                                                         />

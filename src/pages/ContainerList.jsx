@@ -1,6 +1,7 @@
+import { getLocalTodayStrSync, getLocalStrFromDate } from '../utils/timezone';
 import { useState, useEffect } from 'react';
 import { getDb, getSetting } from '../db/Database';
-import { Plus, Download, Calendar, Edit, FileText, CheckCircle, Navigation, XCircle, Search, Printer, ChevronDown, ChevronUp, Columns } from 'lucide-react';
+import { Plus, Download, Calendar, Edit, FileText, CheckCircle, Navigation, XCircle, Search, Printer, ChevronDown, ChevronUp, Columns, Star } from 'lucide-react';
 import { save, confirm } from '@tauri-apps/plugin-dialog';
 import { writeTextFile } from '@tauri-apps/plugin-fs';
 import { fetch } from '@tauri-apps/plugin-http';
@@ -62,7 +63,7 @@ export default function ContainerList({ currentUser, onNavigateToShipment, isAct
     const [searchContent, setSearchContent] = useState('');
 
     const [sortConfig, setSortConfig] = useState({ key: 'hbl_no', direction: 'asc' });
-    const defaultCols = ['cntr_no', 'hbl_no', 'shipper', 'invoice_no', 'payment', 'doc', 'contents', 'tracking', 'pol', 'etd', 'eta', 'original_eta', 'delivery', 'info', 'last_free_dtn'];
+    const defaultCols = ['cntr_no', 'hbl_no', 'shipper', 'invoice_no', 'payment', 'doc', 'contents', 'tracking', 'pol', 'etd', 'eta', 'original_eta', 'delivery', 'info', 'last_free_dtn', 'memo'];
     const [visibleColumns, setVisibleColumns] = useState(defaultCols);
     const [showColumnModal, setShowColumnModal] = useState(false);
 
@@ -275,6 +276,18 @@ export default function ContainerList({ currentUser, onNavigateToShipment, isAct
         setModalOpen(true);
     };
 
+    const toggleMark = async (containerId, currentMark) => {
+        if (!canWrite) return;
+        try {
+            const db = await getDb();
+            const nextMark = currentMark ? 0 : 1;
+            await db.execute('UPDATE containers SET mark_record = $1 WHERE container_id = $2', [nextMark, containerId]);
+            setRecords(prev => prev.map(r => r.container_id === containerId ? { ...r, mark_record: nextMark } : r));
+        } catch (e) {
+            console.error("Failed to mark record", e);
+        }
+    };
+
     const handleModalSave = async (formData) => {
         try {
             const db = await getDb();
@@ -394,7 +407,7 @@ export default function ContainerList({ currentUser, onNavigateToShipment, isAct
     const handleReceivedClick = async (containerId) => {
         if (!canWrite) return;
         try {
-            const today = new Date().toISOString().split('T')[0];
+            const today = getLocalTodayStrSync();
             const db = await getDb();
             await db.execute('UPDATE containers SET warehouse_received = $1 WHERE container_id = $2', [today, containerId]);
             loadRecords(activeYear);
@@ -612,7 +625,7 @@ export default function ContainerList({ currentUser, onNavigateToShipment, isAct
     .report-table th { background: #f8fafc; font-weight: bold; color: #475569; }
     @media print {
         body { padding: 0; margin: 0; }
-        @page { size: landscape; margin: 10mm; }
+        @page { margin: 10mm; }
     }
 </style>
 </head>
@@ -745,7 +758,7 @@ export default function ContainerList({ currentUser, onNavigateToShipment, isAct
         if (filterDeliveryStatus.length > 0) {
             let rowStatus = 'not_started';
             if (row.delivery) {
-                const todayStr = new Date().toISOString().split('T')[0];
+                const todayStr = getLocalTodayStrSync();
                 if (row.delivery < todayStr) {
                     rowStatus = 'delivered';
                 } else {
@@ -760,6 +773,7 @@ export default function ContainerList({ currentUser, onNavigateToShipment, isAct
             const contentMatch = (row.info || '').toLowerCase().includes(lowerSearch) ||
                 (row.cntr_no || '').toLowerCase().includes(lowerSearch) ||
                 rData.productsList.join(' ').toLowerCase().includes(lowerSearch) ||
+                rData.invoices.join(' ').toLowerCase().includes(lowerSearch) ||
                 rData.hbls.join(' ').toLowerCase().includes(lowerSearch);
             if (!contentMatch) return false;
         }
@@ -798,12 +812,17 @@ export default function ContainerList({ currentUser, onNavigateToShipment, isAct
             let allDepositPaid = true;
             let allBalancePaid = true;
             let hasContainers = false;
+            let containerizedProductIds = new Set();
 
             for (const c of allContainers) {
                 try {
                     const parsed = JSON.parse(c.contents || '[]');
-                    if (parsed.some(item => item.shipment_id == sId)) {
+                    const block = parsed.find(item => item.shipment_id == sId);
+                    if (block) {
                         hasContainers = true;
+                        if (block.products) {
+                            block.products.forEach(p => containerizedProductIds.add(p.product_id.toString()));
+                        }
                         const depObj = c.deposit ? JSON.parse(c.deposit) : {};
                         const balObj = c.balance ? JSON.parse(c.balance) : {};
 
@@ -814,8 +833,31 @@ export default function ContainerList({ currentUser, onNavigateToShipment, isAct
             }
 
             if (hasContainers) {
-                const [shipment] = await db.select('SELECT shipper FROM shipments WHERE shipment_id = $1', [sId]);
+                const [shipment] = await db.select('SELECT shipper, products FROM shipments WHERE shipment_id = $1', [sId]);
                 if (shipment) {
+                    let shipmentProductIds = [];
+                    if (shipment.products) {
+                        if (shipment.products.startsWith('[')) {
+                            try {
+                                shipmentProductIds = JSON.parse(shipment.products).map(p => p.id.toString());
+                            } catch (e) { }
+                        } else {
+                            shipmentProductIds = shipment.products.split(',');
+                        }
+                    }
+
+                    let allProductsContainerized = true;
+                    for (const pid of shipmentProductIds) {
+                        if (!containerizedProductIds.has(pid)) {
+                            allProductsContainerized = false;
+                            break;
+                        }
+                    }
+
+                    if (!allProductsContainerized) {
+                        allBalancePaid = false;
+                    }
+
                     const [shipper] = await db.select('SELECT deposit FROM shippers WHERE shipper_id = $1', [shipment.shipper]);
                     const rate = shipper ? (shipper.deposit || 0) : 0;
 
@@ -830,7 +872,7 @@ export default function ContainerList({ currentUser, onNavigateToShipment, isAct
                     if (!allDepositPaid || (!allBalancePaid && rate < 100)) {
                         await db.execute('UPDATE shipments SET payment_date = NULL WHERE shipment_id = $1', [sId]);
                     } else if (allDepositPaid && (allBalancePaid || rate === 100)) {
-                        await db.execute('UPDATE shipments SET payment_date = COALESCE(payment_date, $1) WHERE shipment_id = $2', [new Date().toISOString().split('T')[0], sId]);
+                        await db.execute('UPDATE shipments SET payment_date = COALESCE(payment_date, $1) WHERE shipment_id = $2', [getLocalTodayStrSync(), sId]);
                     }
                 }
             }
@@ -917,7 +959,7 @@ export default function ContainerList({ currentUser, onNavigateToShipment, isAct
         const key = sortConfig.key;
 
         let valA, valB;
-        if (['cntr_no', 'pol', 'etd', 'eta', 'original_eta', 'delivery', 'info', 'last_free_dtn', 'track_status', 'ocean_shipper_name'].includes(key)) {
+        if (['cntr_no', 'pol', 'etd', 'eta', 'original_eta', 'delivery', 'info', 'last_free_dtn', 'track_status', 'ocean_shipper_name', 'memo'].includes(key)) {
             valA = a[key] || '';
             valB = b[key] || '';
         } else {
@@ -1063,6 +1105,7 @@ export default function ContainerList({ currentUser, onNavigateToShipment, isAct
                                         {visibleColumns.includes('delivery') && <th className="has-sort-icon" style={{ width: '130px', minWidth: '130px', cursor: 'pointer' }} onClick={() => handleSort('delivery')}><SortIcon columnKey="delivery" /> Delivery</th>}
                                         {visibleColumns.includes('info') && <th className="has-sort-icon" style={{ width: '150px', minWidth: '150px', cursor: 'pointer' }} onClick={() => handleSort('info')}><SortIcon columnKey="info" /> Info</th>}
                                         {visibleColumns.includes('last_free_dtn') && <th className="has-sort-icon" style={{ width: '130px', minWidth: '130px', cursor: 'pointer' }} onClick={() => handleSort('last_free_dtn')}><SortIcon columnKey="last_free_dtn" /> Last Free DTN</th>}
+                                        {visibleColumns.includes('memo') && <th className="has-sort-icon" style={{ width: '200px', minWidth: '200px', cursor: 'pointer' }} onClick={() => handleSort('memo')}><SortIcon columnKey="memo" /> Memo</th>}
                                         {canWrite && <th style={{ width: '40px', minWidth: '40px' }}></th>}
                                     </tr>
                                 </thead>
@@ -1078,8 +1121,17 @@ export default function ContainerList({ currentUser, onNavigateToShipment, isAct
                                             const rData = getRowParsedData(row);
                                             return (
                                                 <tr key={row.container_id}>
-                                                    <td style={{ padding: 0, margin: 0, backgroundColor: row.ocean_shipper_colour || 'transparent', width: '24px', minWidth: '24px', borderRight: '1px solid #cbd5e1' }}>
+                                                    <td style={{ padding: 0, margin: 0, backgroundColor: row.ocean_shipper_colour || 'transparent', width: '24px', minWidth: '24px', borderRight: '1px solid #cbd5e1', position: 'relative' }}>
                                                         <span style={{ display: 'none' }}>{row.ocean_shipper_name}</span>
+                                                        <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%', width: '100%', minHeight: '40px' }}>
+                                                            <button
+                                                                onClick={(e) => { e.stopPropagation(); toggleMark(row.container_id, row.mark_record); }}
+                                                                style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0, display: 'flex' }}
+                                                                title={row.mark_record ? "Unmark" : "Mark"}
+                                                            >
+                                                                <Star size={16} fill={row.mark_record ? '#ffde76' : 'none'} color={row.mark_record ? '#ffde76' : (row.ocean_shipper_colour ? 'rgba(0,0,0,0.3)' : '#cbd5e1')} />
+                                                            </button>
+                                                        </div>
                                                     </td>
                                                     {canWrite && (
                                                         <td style={{ width: '120px', minWidth: '120px', textAlign: 'center', verticalAlign: 'middle' }}>
@@ -1158,7 +1210,7 @@ export default function ContainerList({ currentUser, onNavigateToShipment, isAct
                                                                                         if (rate === 100) {
                                                                                             if (checked) {
                                                                                                 dbBalance = 0;
-                                                                                                dbPaymentDate = dbPaymentDate || new Date().toISOString().split('T')[0];
+                                                                                                dbPaymentDate = dbPaymentDate || getLocalTodayStrSync();
                                                                                             } else {
                                                                                                 dbBalance = null;
                                                                                                 dbPaymentDate = null;
@@ -1179,7 +1231,7 @@ export default function ContainerList({ currentUser, onNavigateToShipment, isAct
                                                                                         onChange={(e) => {
                                                                                             const checked = e.target.checked;
                                                                                             let dbBalance = checked ? (100 - rate) : null;
-                                                                                            let dbPaymentDate = (checked && isDepositPaid && !currentPaymentDate) ? new Date().toISOString().split('T')[0] : currentPaymentDate;
+                                                                                            let dbPaymentDate = (checked && isDepositPaid && !currentPaymentDate) ? getLocalTodayStrSync() : currentPaymentDate;
                                                                                             handleContainerPaymentUpdate(row.container_id, sId, 'balance', dbBalance, { payment_date: dbPaymentDate });
                                                                                         }}
                                                                                     />
@@ -1257,6 +1309,11 @@ export default function ContainerList({ currentUser, onNavigateToShipment, isAct
                                                         </div>
                                                     </td>}
                                                     {visibleColumns.includes('last_free_dtn') && <td><div className="readonly-cell">{row.last_free_dtn}</div></td>}
+                                                    {visibleColumns.includes('memo') && <td>
+                                                        <div className="readonly-cell" style={{ whiteSpace: 'pre-wrap' }}>
+                                                            {row.memo}
+                                                        </div>
+                                                    </td>}
                                                     {canWrite && (
                                                         <td style={{ width: '40px', minWidth: '40px', textAlign: 'center', verticalAlign: 'middle' }}>
                                                             <button

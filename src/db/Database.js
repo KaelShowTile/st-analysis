@@ -263,6 +263,22 @@ const initializeTables = async (db) => {
         await db.execute('ALTER TABLE shipments ADD COLUMN payment_date TEXT');
     } catch (e) {}
 
+    
+    // Container mark_record migration
+    try {
+        await db.execute('ALTER TABLE containers ADD COLUMN mark_record INTEGER DEFAULT 0');
+    } catch (e) {}
+
+    // Shipper contact info and Report shipper_id migrations
+    try {
+        await db.execute('ALTER TABLE shippers ADD COLUMN contact_name TEXT');
+        await db.execute('ALTER TABLE shippers ADD COLUMN contact_number TEXT');
+    } catch (e) {}
+
+    try {
+        await db.execute('ALTER TABLE reports ADD COLUMN shipper_id INTEGER');
+    } catch (e) {}
+
     // Drop unused columns from containers
     const dropCols = ['payment', 'seq', 'shipper', 'invoice_no', 'hbl_no'];
     for (const col of dropCols) {

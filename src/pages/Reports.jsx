@@ -1,3 +1,4 @@
+import { getLocalTodayStrSync, getLocalStrFromDate } from '../utils/timezone';
 import { useState, useEffect, useMemo } from 'react';
 import { getDb } from '../db/Database';
 import { Plus, Search, Trash2, Save, X, PlusCircle, Sparkles, Download, RefreshCw, Printer, GripVertical, ChevronUp, ChevronDown } from 'lucide-react';
@@ -23,6 +24,9 @@ export default function Reports({ currentUser, initialReportId, isActive }) {
     const [newReportName, setNewReportName] = useState('');
     const [reportIgnore, setReportIgnore] = useState(false);
     const [reportSearchTerm, setReportSearchTerm] = useState('');
+    const [shippers, setShippers] = useState([]);
+    const [reportShipperId, setReportShipperId] = useState('');
+    const [expandedShippers, setExpandedShippers] = useState({});
     const [selectedProducts, setSelectedProducts] = useState([]);
 
     const [showAddFinish, setShowAddFinish] = useState(false);
@@ -44,8 +48,12 @@ export default function Reports({ currentUser, initialReportId, isActive }) {
         const db = await getDb();
 
         // Load Reports
-        const reps = await db.select('SELECT id, name, end_date FROM reports ORDER BY id DESC');
+        const reps = await db.select('SELECT id, name, end_date, shipper_id FROM reports ORDER BY id DESC');
         setReports(reps);
+        
+        // Load Shippers
+        const sh = await db.select('SELECT shipper_id, shipper_name FROM shippers ORDER BY shipper_name ASC');
+        setShippers(sh);
 
         // Load Inventory
         const inv = await db.select('SELECT sku, available, total_qty, days, extracted_name, extracted_finish, extracted_size, extracted_colour, backorder, backorder_amount FROM inventory');
@@ -96,7 +104,7 @@ export default function Reports({ currentUser, initialReportId, isActive }) {
             if (!r.start_date && r.end_date) {
                 const ed = new Date(r.end_date);
                 ed.setDate(ed.getDate() - 30);
-                r.start_date = ed.toISOString().split('T')[0];
+                r.start_date = getLocalStrFromDate(ed);
             }
             setActiveReport({ ...r, data: parsedData });
             setActiveFinishIdx(0);
@@ -112,7 +120,7 @@ export default function Reports({ currentUser, initialReportId, isActive }) {
             await db.execute('UPDATE reports SET end_date = $1, start_date = $2, data = $3 WHERE id = $4',
                 [activeReport.end_date, activeReport.start_date, jsonStr, activeReport.id]);
 
-            const reps = await db.select('SELECT id, name, end_date FROM reports ORDER BY id DESC');
+            const reps = await db.select('SELECT id, name, end_date, shipper_id FROM reports ORDER BY id DESC');
             setReports(reps);
         } catch (err) {
             console.error("Failed to save report data", err);
@@ -306,28 +314,25 @@ export default function Reports({ currentUser, initialReportId, isActive }) {
         if (!name) return;
         const db = await getDb();
         const ignoreVal = reportIgnore ? 1 : 0;
+        const finalData = editReportId ? (activeReport.data || { finishes: [] }) : { finishes: [], productNames: selectedProducts };
+        finalData.productNames = selectedProducts;
 
-        if (editReportId) {
-            // Update existing report
-            const currentData = activeReport.data || { finishes: [] };
-            currentData.productNames = selectedProducts;
-            const jsonData = JSON.stringify(currentData);
+        try {
+            if (editReportId) {
+                await db.execute('UPDATE reports SET name = $1, data = $2, ignore = $3, shipper_id = $4 WHERE id = $5', [name, JSON.stringify(finalData), ignoreVal, reportShipperId || null, editReportId]);
+            } else {
+                const today = new Date();
+                const endStr = getLocalStrFromDate(today);
+                today.setMonth(today.getMonth() - 3);
+                const startStr = getLocalStrFromDate(today);
+                const res = await db.execute('INSERT INTO reports (name, start_date, end_date, data, ignore, shipper_id) VALUES ($1, $2, $3, $4, $5, $6)', [name, startStr, endStr, JSON.stringify(finalData), ignoreVal, reportShipperId || null]);
+                setEditReportId(res.lastInsertId);
+            }
 
-            await db.execute('UPDATE reports SET name = $1, data = $2, ignore = $3 WHERE id = $4', [name, jsonData, ignoreVal, editReportId]);
             await loadCoreData();
-            loadReportData(editReportId);
-        } else {
-            // Create new report
-            const today = new Date();
-            const endStr = today.toISOString().split('T')[0];
-            today.setDate(today.getDate() - 30);
-            const startStr = today.toISOString().split('T')[0];
-
-            const emptyData = JSON.stringify({ finishes: [], productNames: selectedProducts });
-            const result = await db.execute('INSERT INTO reports (name, start_date, end_date, data, ignore) VALUES ($1, $2, $3, $4, $5)',
-                [name, startStr, endStr, emptyData, ignoreVal]);
-            await loadCoreData();
-            loadReportData(result.lastInsertId);
+            if (editReportId) loadReportData(editReportId);
+        } catch (err) {
+            console.error("Failed to save report data", err);
         }
 
         setShowAddReport(false);
@@ -438,7 +443,13 @@ export default function Reports({ currentUser, initialReportId, isActive }) {
             });
         });
 
-        return newData;
+        newData.finishes.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' }));
+    newData.finishes.forEach(finish => {
+        finish.sizes.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' }));
+        finish.colours.sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' }));
+    });
+
+    return newData;
     };
 
     const updateReportData = (reportObj, invList) => {
@@ -853,14 +864,43 @@ export default function Reports({ currentUser, initialReportId, isActive }) {
             return 0;
         });
 
+    const toggleShipperExpand = (shipperId) => {
+        setExpandedShippers(prev => ({...prev, [shipperId]: !prev[shipperId]}));
+    };
+
+    const renderReportItem = (r) => (
+        <div
+            key={r.id}
+            className={`report-item ${activeReport?.id === r.id ? 'active' : ''}`}
+            onClick={() => loadReportData(r.id)}
+            style={{ paddingLeft: '12px' }}
+        >
+            <span>{r.name}</span>
+            {canWrite && <Trash2 size={14} style={{ opacity: 0.6 }} onClick={(e) => { e.stopPropagation(); deleteReport(r.id); }} />}
+        </div>
+    );
+
+    const groupedReports = { unassigned: [] };
+    shippers.forEach(s => groupedReports[s.shipper_id] = { name: s.shipper_name, reports: [] });
+    
+    sortedReports.forEach(r => {
+        if (r.shipper_id && groupedReports[r.shipper_id]) {
+            groupedReports[r.shipper_id].reports.push(r);
+        } else {
+            groupedReports.unassigned.push(r);
+        }
+    });
+
     return (
         <div className="reports-layout">
             <div className="reports-sidebar">
                 <div className="sidebar-header">
                     <button className="btn-upload btn-full" onClick={() => {
-                        setEditReportId(null);
                         setNewReportName('');
+                        setReportIgnore(false);
+                        setReportShipperId('');
                         setSelectedProducts([]);
+                        setEditReportId(null);
                         setShowAddReport(true);
                     }} disabled={!canWrite} style={{
                         marginBottom: '8px',
@@ -893,16 +933,28 @@ export default function Reports({ currentUser, initialReportId, isActive }) {
                     </div>
                 </div>
                 <div className="reports-list">
-                    {sortedReports.map(r => (
-                        <div
-                            key={r.id}
-                            className={`report-item ${activeReport?.id === r.id ? 'active' : ''}`}
-                            onClick={() => loadReportData(r.id)}
-                        >
-                            <span>{r.name}</span>
-                            {canWrite && <Trash2 size={14} style={{ opacity: 0.6 }} onClick={(e) => { e.stopPropagation(); deleteReport(r.id); }} />}
+                    {shippers.map(s => {
+                        const sr = groupedReports[s.shipper_id]?.reports || [];
+                        if (sr.length === 0 && !expandedShippers[s.shipper_id]) return null;
+                        return (
+                            <div key={s.shipper_id}>
+                                <div 
+                                    className="report-item" 
+                                    style={{ fontWeight: 'bold', background: 'var(--surface-color)', borderBottom: '1px solid var(--border-color)' }}
+                                    onClick={() => toggleShipperExpand(s.shipper_id)}
+                                >
+                                    <span style={{ fontSize: '12px' }}>{expandedShippers[s.shipper_id] ? '▼' : '▶'} {s.shipper_name}</span>
+                                </div>
+                                {expandedShippers[s.shipper_id] && sr.map(renderReportItem)}
+                            </div>
+                        );
+                    })}
+                    {groupedReports.unassigned.length > 0 && (
+                        <div style={{ marginTop: '8px', borderTop: shippers.length > 0 ? '1px solid var(--border-color)' : 'none', paddingTop: '8px' }}>
+                            <div style={{ padding: '4px 12px', fontSize: '12px', fontWeight: 'bold', color: 'var(--text-color)', opacity: 0.7 }}>Unassigned</div>
+                            {groupedReports.unassigned.map(renderReportItem)}
                         </div>
-                    ))}
+                    )}
                     {reports.length === 0 && <div style={{ padding: '12px', color: '#64748b', fontSize: '0.9rem', textAlign: 'center' }}>No reports yet</div>}
                 </div>
             </div>
@@ -920,6 +972,7 @@ export default function Reports({ currentUser, initialReportId, isActive }) {
                                         setEditReportId(activeReport.id);
                                         setNewReportName(activeReport.name);
                                         setReportIgnore(activeReport.ignore === 1);
+                                        setReportShipperId(activeReport.shipper_id || '');
                                         setSelectedProducts(activeReport.data?.productNames || []);
                                         setShowAddReport(true);
                                     }}>
@@ -1148,6 +1201,18 @@ export default function Reports({ currentUser, initialReportId, isActive }) {
                         </div>
 
                         <div style={{ marginBottom: '16px' }}>
+                            <label style={{ display: 'block', marginBottom: '8px', fontWeight: 'bold' }}>Link to Shipper (Optional)</label>
+                            <select
+                                className="form-input"
+                                value={reportShipperId}
+                                onChange={(e) => setReportShipperId(e.target.value)}
+                                style={{ marginBottom: '16px', width: '100%', padding: '8px' }}
+                            >
+                                <option value="">None</option>
+                                {shippers.map(s => (
+                                    <option key={s.shipper_id} value={s.shipper_id}>{s.shipper_name}</option>
+                                ))}
+                            </select>
                             <label style={{ display: 'block', marginBottom: '8px', fontWeight: 'bold' }}>Select Products to Include</label>
                             <input
                                 type="text"
