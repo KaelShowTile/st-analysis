@@ -11,7 +11,8 @@ export default function ContainerModal({ record, year, onClose, onSave }) {
         memo: '',
         ocean_shipper: '',
         last_free_dtn: '',
-        contents: [] // Array of { shipment_id, hbl_no, products: [{product_id, sales_description}] }
+        freight_cost: '',
+        contents: [] // Array of { shipment_id, hbl_no, deposit_amount, balance_amount, balance_currency, products: [{product_id, sales_description}] }
     });
 
     const [openShipments, setOpenShipments] = useState([]);
@@ -36,6 +37,7 @@ export default function ContainerModal({ record, year, onClose, onSave }) {
                 memo: record.memo || '',
                 ocean_shipper: record.ocean_shipper || '',
                 last_free_dtn: record.last_free_dtn || '',
+                freight_cost: record.freight_cost || '',
                 contents: Array.isArray(parsedContents) ? parsedContents : []
             });
         }
@@ -48,16 +50,15 @@ export default function ContainerModal({ record, year, onClose, onSave }) {
             const db = await getDb();
             // Load shipments
             const shpOrders = await db.select(`
-                SELECT s.shipment_id, s.invoice_no, s.note, s.products, s.hbl_no, p.shipper_name 
+                SELECT s.shipment_id, s.invoice_no, s.note, s.products, s.hbl_no, p.shipper_name, s.status 
                 FROM shipments s 
                 LEFT JOIN shippers p ON s.shipper = p.shipper_id 
-                WHERE s.status = 'open' OR s.status = 'processing'
                 ORDER BY p.shipper_name ASC, s.invoice_no ASC
             `);
             setOpenShipments(shpOrders);
 
-            // Load all inventory to get descriptions
-            const inv = await db.select('SELECT product_id, sales_description FROM inventory');
+            // Load all inventory to get descriptions and SKUs
+            const inv = await db.select('SELECT product_id, sku, sales_description FROM inventory');
             setInventory(inv);
 
             // Load ocean shippers
@@ -75,7 +76,7 @@ export default function ContainerModal({ record, year, onClose, onSave }) {
     const addShipmentBlock = () => {
         setFormData(prev => ({
             ...prev,
-            contents: [...prev.contents, { shipment_id: '', hbl_no: '', products: [] }]
+            contents: [...prev.contents, { shipment_id: '', hbl_no: '', deposit_amount: '', balance_amount: '', balance_currency: '', products: [] }]
         }));
     };
 
@@ -103,6 +104,19 @@ export default function ContainerModal({ record, year, onClose, onSave }) {
         });
     };
 
+    const handleProductAttrChange = (blockIndex, productId, field, value) => {
+        setFormData(prev => {
+            const newContents = [...prev.contents];
+            const block = { ...newContents[blockIndex] };
+            const prodIdx = block.products.findIndex(p => p.product_id.toString() === productId.toString());
+            if (prodIdx >= 0) {
+                block.products[prodIdx] = { ...block.products[prodIdx], [field]: value };
+            }
+            newContents[blockIndex] = block;
+            return { ...prev, contents: newContents };
+        });
+    };
+
     const toggleProduct = (blockIndex, productId) => {
         setFormData(prev => {
             const newContents = [...prev.contents];
@@ -116,7 +130,9 @@ export default function ContainerModal({ record, year, onClose, onSave }) {
                 if (invItem) {
                     block.products = [...block.products, {
                         product_id: invItem.product_id,
-                        sales_description: invItem.sales_description
+                        sales_description: invItem.sku ? `${invItem.sku} - ${invItem.sales_description}` : invItem.sales_description,
+                        sqm: '',
+                        weight: ''
                     }];
                 }
             }
@@ -137,6 +153,7 @@ export default function ContainerModal({ record, year, onClose, onSave }) {
             memo: formData.memo,
             ocean_shipper: formData.ocean_shipper,
             last_free_dtn: formData.last_free_dtn,
+            freight_cost: formData.freight_cost,
             contents: JSON.stringify(formData.contents),
             year: record ? record.year : year
         });
@@ -150,7 +167,7 @@ export default function ContainerModal({ record, year, onClose, onSave }) {
         if (shp.products.startsWith('[')) {
             try {
                 prodIds = JSON.parse(shp.products).map(p => p.id.toString());
-            } catch(e) {}
+            } catch (e) { }
         } else {
             prodIds = shp.products.split(',');
         }
@@ -188,6 +205,10 @@ export default function ContainerModal({ record, year, onClose, onSave }) {
                                     <option key={os.ocean_shipper_id} value={os.ocean_shipper_id}>{os.ocean_shipper_name}</option>
                                 ))}
                             </select>
+                        </div>
+                        <div className="form-group">
+                            <label>Freight Cost (USD/EUR)</label>
+                            <input type="number" className="form-control" value={formData.freight_cost} onChange={e => handleChange('freight_cost', e.target.value)} />
                         </div>
                         <div className="form-group" style={{ gridColumn: '1 / -1' }}>
                             <label>Memo</label>
@@ -248,7 +269,7 @@ export default function ContainerModal({ record, year, onClose, onSave }) {
                                                 <option value="" disabled>Select a shipment...</option>
                                                 {openShipments.map(s => (
                                                     <option key={s.shipment_id} value={s.shipment_id}>
-                                                        {s.shipper_name} | Inv: {s.invoice_no} {s.note ? `| ${s.note}` : ''}
+                                                        {s.status === 'closed' ? '[Closed] ' : ''}{s.shipper_name} | Inv: {s.invoice_no} {s.note ? `| ${s.note}` : ''}
                                                     </option>
                                                 ))}
                                                 {/* In case it's an old saved shipment not in "open" list */}
@@ -269,37 +290,103 @@ export default function ContainerModal({ record, year, onClose, onSave }) {
                                         </div>
                                     </div>
 
+                                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '16px', marginBottom: '16px', paddingRight: '24px' }}>
+                                        <div className="form-group" style={{ margin: 0 }}>
+                                            <label style={{ fontSize: '0.85rem' }}>Deposit Amount</label>
+                                            <input
+                                                type="number"
+                                                className="form-control"
+                                                value={block.deposit_amount || ''}
+                                                onChange={e => handleContentChange(idx, 'deposit_amount', e.target.value)}
+                                                placeholder="USD"
+                                            />
+                                        </div>
+                                        <div className="form-group" style={{ margin: 0 }}>
+                                            <label style={{ fontSize: '0.85rem' }}>Balance Amount</label>
+                                            <input
+                                                type="number"
+                                                className="form-control"
+                                                value={block.balance_amount || ''}
+                                                onChange={e => handleContentChange(idx, 'balance_amount', e.target.value)}
+                                                placeholder="USD"
+                                            />
+                                        </div>
+                                        <div className="form-group" style={{ margin: 0 }}>
+                                            <label style={{ fontSize: '0.85rem' }}>Balance Currency Rate</label>
+                                            <input
+                                                type="number"
+                                                className="form-control"
+                                                value={block.balance_currency || ''}
+                                                onChange={e => handleContentChange(idx, 'balance_currency', e.target.value)}
+                                                placeholder="AUD/USD Rate"
+                                            />
+                                        </div>
+                                    </div>
+
                                     <div className="form-group" style={{ margin: 0 }}>
                                         <label style={{ fontSize: '0.85rem' }}>Products from this Shipment</label>
                                         {block.shipment_id ? (
-                                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', marginTop: '8px' }}>
-                                                {availableProds.map(p => {
-                                                    const isSelected = block.products.some(selected => selected.product_id.toString() === p.product_id.toString());
-                                                    return (
-                                                        <div
-                                                            key={p.product_id}
-                                                            onClick={() => toggleProduct(idx, p.product_id)}
-                                                            style={{
-                                                                padding: '6px 12px',
-                                                                borderRadius: '4px',
-                                                                fontSize: '0.85rem',
-                                                                cursor: 'pointer',
-                                                                border: isSelected ? '1px solid var(--primary-color)' : '1px solid #cbd5e1',
-                                                                backgroundColor: isSelected ? 'rgba(59, 130, 246, 0.1)' : 'white',
-                                                                display: 'flex', alignItems: 'center', gap: '6px'
-                                                            }}
-                                                        >
-                                                            {isSelected && <Check size={14} color="var(--primary-color)" />}
-                                                            {p.sales_description}
-                                                        </div>
-                                                    );
-                                                })}
-                                                {availableProds.length === 0 && (
+                                            <div style={{ marginTop: '8px' }}>
+                                                {availableProds.length > 0 ? (
+                                                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.85rem' }}>
+                                                        <thead>
+                                                            <tr style={{ background: '#f1f5f9', borderBottom: '1px solid #cbd5e1' }}>
+                                                                <th style={{ padding: '8px', textAlign: 'left', border: '1px solid #cbd5e1' }}>Name</th>
+                                                                <th style={{ padding: '8px', textAlign: 'left', border: '1px solid #cbd5e1', width: '120px' }}>SQM</th>
+                                                                <th style={{ padding: '8px', textAlign: 'left', border: '1px solid #cbd5e1', width: '120px' }}>Weight (kg)</th>
+                                                            </tr>
+                                                        </thead>
+                                                        <tbody>
+                                                            {availableProds.map(p => {
+                                                                const selectedItem = block.products.find(selected => selected.product_id.toString() === p.product_id.toString());
+                                                                const isSelected = !!selectedItem;
+                                                                return (
+                                                                    <tr key={p.product_id} style={{ background: isSelected ? 'rgba(59, 130, 246, 0.05)' : 'white' }}>
+                                                                        <td
+                                                                            style={{ padding: '8px', border: '1px solid #cbd5e1', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '8px' }}
+                                                                            onClick={() => toggleProduct(idx, p.product_id)}
+                                                                        >
+                                                                            <div style={{
+                                                                                width: '16px', height: '16px', borderRadius: '3px',
+                                                                                border: isSelected ? 'none' : '1px solid #cbd5e1',
+                                                                                backgroundColor: isSelected ? 'var(--primary-color)' : 'white',
+                                                                                display: 'flex', alignItems: 'center', justifyContent: 'center'
+                                                                            }}>
+                                                                                {isSelected && <Check size={12} color="white" />}
+                                                                            </div>
+                                                                            {p.sales_description}
+                                                                        </td>
+                                                                        <td style={{ padding: '8px', border: '1px solid #cbd5e1' }}>
+                                                                            <input
+                                                                                type="number"
+                                                                                className="form-control"
+                                                                                style={{ padding: '4px', height: 'auto', margin: 0 }}
+                                                                                value={isSelected ? (selectedItem.sqm || '') : ''}
+                                                                                onChange={e => handleProductAttrChange(idx, p.product_id, 'sqm', e.target.value)}
+                                                                                disabled={!isSelected}
+                                                                            />
+                                                                        </td>
+                                                                        <td style={{ padding: '8px', border: '1px solid #cbd5e1' }}>
+                                                                            <input
+                                                                                type="number"
+                                                                                className="form-control"
+                                                                                style={{ padding: '4px', height: 'auto', margin: 0 }}
+                                                                                value={isSelected ? (selectedItem.weight || '') : ''}
+                                                                                onChange={e => handleProductAttrChange(idx, p.product_id, 'weight', e.target.value)}
+                                                                                disabled={!isSelected}
+                                                                            />
+                                                                        </td>
+                                                                    </tr>
+                                                                );
+                                                            })}
+                                                        </tbody>
+                                                    </table>
+                                                ) : (
                                                     <span style={{ color: '#94a3b8', fontSize: '0.85rem' }}>No products available in this shipment.</span>
                                                 )}
                                             </div>
                                         ) : (
-                                            <div style={{ fontSize: '0.85rem', color: '#94a3b8' }}>Please select a shipment first.</div>
+                                            <div style={{ fontSize: '0.85rem', color: '#94a3b8', marginTop: '8px' }}>Please select a shipment first.</div>
                                         )}
                                     </div>
                                 </div>

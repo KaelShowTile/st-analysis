@@ -11,6 +11,9 @@ export default function ShipmentOrders({ currentUser, initialEditId, onClearEdit
     const [filteredOrders, setFilteredOrders] = useState([]);
     const [shippers, setShippers] = useState([]);
     const [inventory, setInventory] = useState([]);
+    const [allContainers, setAllContainers] = useState([]);
+    const [allOceanShippers, setAllOceanShippers] = useState([]);
+    const [storageFee, setStorageFee] = useState(0);
 
     // Filters
     const [filterShipper, setFilterShipper] = useState('');
@@ -75,6 +78,15 @@ export default function ShipmentOrders({ currentUser, initialEditId, onClearEdit
 
             const iRes = await db.select('SELECT * FROM inventory WHERE backorder = 1 ORDER BY sales_description ASC');
             setInventory(iRes);
+            
+            const cRes = await db.select('SELECT * FROM containers');
+            setAllContainers(cRes);
+            
+            const osRes = await db.select('SELECT * FROM ocean_shippers');
+            setAllOceanShippers(osRes);
+            
+            const sf = await getSetting('storage_fee', '0');
+            setStorageFee(parseFloat(sf) || 0);
 
             await loadOrders();
         } catch (e) {
@@ -173,13 +185,34 @@ export default function ShipmentOrders({ currentUser, initialEditId, onClearEdit
     const toggleProduct = (productId) => {
         setFormData(prev => {
             const current = [...prev.products];
+            const details = { ...prev.product_details };
             const idStr = productId.toString();
             if (current.includes(idStr)) {
-                return { ...prev, products: current.filter(id => id !== idStr) };
+                delete details[idStr];
+                return { ...prev, products: current.filter(id => id !== idStr), product_details: details };
             } else {
-                return { ...prev, products: [...current, idStr] };
+                const item = inventory.find(i => i.product_id.toString() === idStr);
+                let extractedSqm = 0;
+                if (item && item.sales_description) {
+                    const match = item.sales_description.match(/\[Backorder-([\d\.]+)\]/i);
+                    if (match && match[1]) {
+                        extractedSqm = parseFloat(match[1]) || 0;
+                    }
+                }
+                details[idStr] = { sqm: extractedSqm, price: '' };
+                return { ...prev, products: [...current, idStr], product_details: details };
             }
         });
+    };
+    
+    const handleProductDetailChange = (id, field, value) => {
+        setFormData(prev => ({
+            ...prev,
+            product_details: {
+                ...prev.product_details,
+                [id]: { ...prev.product_details[id], [field]: value }
+            }
+        }));
     };
 
     const handleSave = async (e) => {
@@ -190,9 +223,12 @@ export default function ShipmentOrders({ currentUser, initialEditId, onClearEdit
             const db = await getDb();
             const prodData = formData.products.map(id => {
                 const item = inventory.find(i => i.product_id.toString() === id);
+                const details = formData.product_details[id] || { sqm: '', weight: '' };
                 return {
                     id,
-                    name: item ? `${item.sku || 'No SKU'} - ${item.sales_description || ''}` : `[ID: ${id}]`
+                    name: item ? `${item.sku || 'No SKU'} - ${item.sales_description || ''}` : `[ID: ${id}]`,
+                    sqm: details.sqm,
+                    weight: details.weight
                 };
             });
             const prodStr = JSON.stringify(prodData);
