@@ -144,6 +144,11 @@ export default function ContainerDetailModal({ record, onClose, inventoryMap, sh
                                                         <span><span style={{ color: '#94a3b8' }}>Invoice:</span> {invoiceNo}</span>
                                                         <span><span style={{ color: '#94a3b8' }}>HBL:</span> {block.hbl_no || '-'}</span>
                                                     </div>
+                                                    <div style={{ display: 'flex', gap: '16px', fontSize: '0.85rem', color: '#64748b', marginTop: '4px' }}>
+                                                        <span><span style={{ color: '#94a3b8' }}>Deposit:</span> {block.deposit_amount ? `$${block.deposit_amount}` : '-'}</span>
+                                                        <span><span style={{ color: '#94a3b8' }}>Balance:</span> {block.balance_amount ? `$${block.balance_amount}` : '-'}</span>
+                                                        <span><span style={{ color: '#94a3b8' }}>Rate:</span> {block.balance_currency || '-'}</span>
+                                                    </div>
                                                 </div>
                                                 {block.shipment_id && onNavigateToShipment && (
                                                     <button

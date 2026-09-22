@@ -33,8 +33,13 @@ export default function ShipmentOrders({ currentUser, initialEditId, onClearEdit
         status: 'open',
         depositPaid: false,
         balancePaid: false,
-        payment_date: ''
+        payment_date: '',
+        deposit_amount: '',
+        deposit_currency: ''
     });
+
+    const [showOrderModal, setShowOrderModal] = useState(false);
+    const [activeTab, setActiveTab] = useState('basic');
 
     const [productSearch, setProductSearch] = useState('');
 
@@ -58,9 +63,11 @@ export default function ShipmentOrders({ currentUser, initialEditId, onClearEdit
 
     useEffect(() => {
         if (initialEditId && orders.length > 0) {
-            const target = orders.find(o => o.shipment_id == initialEditId);
+            const target = orders.find(o => String(o.shipment_id) === String(initialEditId));
             if (target) {
-                handleEditClick(target);
+                setTimeout(() => {
+                    handleEditClick(target);
+                }, 100);
                 if (onClearEdit) onClearEdit();
             }
         }
@@ -78,13 +85,13 @@ export default function ShipmentOrders({ currentUser, initialEditId, onClearEdit
 
             const iRes = await db.select('SELECT * FROM inventory WHERE backorder = 1 ORDER BY sales_description ASC');
             setInventory(iRes);
-            
+
             const cRes = await db.select('SELECT * FROM containers');
             setAllContainers(cRes);
-            
+
             const osRes = await db.select('SELECT * FROM ocean_shippers');
             setAllOceanShippers(osRes);
-            
+
             const sf = await getSetting('storage_fee', '0');
             setStorageFee(parseFloat(sf) || 0);
 
@@ -111,7 +118,7 @@ export default function ShipmentOrders({ currentUser, initialEditId, onClearEdit
                             }
                         }
                     }
-                } catch (e) {}
+                } catch (e) { }
             }
             const enriched = res.map(o => ({
                 ...o,
@@ -204,7 +211,7 @@ export default function ShipmentOrders({ currentUser, initialEditId, onClearEdit
             }
         });
     };
-    
+
     const handleProductDetailChange = (id, field, value) => {
         setFormData(prev => ({
             ...prev,
@@ -223,12 +230,13 @@ export default function ShipmentOrders({ currentUser, initialEditId, onClearEdit
             const db = await getDb();
             const prodData = formData.products.map(id => {
                 const item = inventory.find(i => i.product_id.toString() === id);
-                const details = formData.product_details[id] || { sqm: '', weight: '' };
+                const details = formData.product_details[id] || { sqm: '', weight: '', price: '' };
                 return {
                     id,
                     name: item ? `${item.sku || 'No SKU'} - ${item.sales_description || ''}` : `[ID: ${id}]`,
                     sqm: details.sqm,
-                    weight: details.weight
+                    weight: details.weight,
+                    price: details.price
                 };
             });
             const prodStr = JSON.stringify(prodData);
@@ -247,13 +255,13 @@ export default function ShipmentOrders({ currentUser, initialEditId, onClearEdit
 
             if (formMode === 'add') {
                 await db.execute(
-                    'INSERT INTO shipments (invoice_no, shipper, products, est_date, hbl_no, note, status, deposit, balance, payment_date) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)',
-                    [formData.invoice_no, formData.shipper, prodStr, formData.est_date, '', formData.note, 'open', dbDeposit, dbBalance, dbPaymentDate]
+                    'INSERT INTO shipments (invoice_no, shipper, products, est_date, hbl_no, note, status, deposit, balance, payment_date, deposit_paid_date, deposit_amount, deposit_currency) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)',
+                    [formData.invoice_no, formData.shipper, prodStr, formData.est_date, '', formData.note, 'open', dbDeposit, dbBalance, dbPaymentDate, formData.deposit_paid_date || null, formData.deposit_amount || null, formData.deposit_currency || null]
                 );
             } else {
                 await db.execute(
-                    'UPDATE shipments SET invoice_no = $1, shipper = $2, products = $3, est_date = $4, note = $5, status = $6, deposit = $7, balance = $8, payment_date = $9 WHERE shipment_id = $10',
-                    [formData.invoice_no, formData.shipper, prodStr, formData.est_date, formData.note, formData.status, dbDeposit, dbBalance, dbPaymentDate, editingId]
+                    'UPDATE shipments SET invoice_no = $1, shipper = $2, products = $3, est_date = $4, note = $5, status = $6, deposit = $7, balance = $8, payment_date = $9, deposit_paid_date = $10, deposit_amount = $11, deposit_currency = $12 WHERE shipment_id = $13',
+                    [formData.invoice_no, formData.shipper, prodStr, formData.est_date, formData.note, formData.status, dbDeposit, dbBalance, dbPaymentDate, formData.deposit_paid_date || null, formData.deposit_amount || null, formData.deposit_currency || null, editingId]
                 );
 
                 // Sync payments down to all linked containers
@@ -290,13 +298,18 @@ export default function ShipmentOrders({ currentUser, initialEditId, onClearEdit
     const handleEditClick = (order) => {
         setFormMode('edit');
         setEditingId(order.shipment_id);
-        
+
         let parsedProducts = [];
+        let parsedDetails = {};
         if (order.products) {
             if (order.products.startsWith('[')) {
                 try {
-                    parsedProducts = JSON.parse(order.products).map(p => p.id.toString());
-                } catch(e) {}
+                    const arr = JSON.parse(order.products);
+                    parsedProducts = arr.map(p => p.id.toString());
+                    arr.forEach(p => {
+                        parsedDetails[p.id.toString()] = { sqm: p.sqm || '', weight: p.weight || '', price: p.price || '' };
+                    });
+                } catch (e) { }
             } else {
                 parsedProducts = order.products.split(',');
             }
@@ -306,13 +319,18 @@ export default function ShipmentOrders({ currentUser, initialEditId, onClearEdit
             invoice_no: order.invoice_no || '',
             shipper: order.shipper || '',
             products: parsedProducts,
+            product_details: parsedDetails,
             est_date: order.est_date || '',
             note: order.note || '',
             status: order.status || 'open',
             depositPaid: order.deposit != null,
             balancePaid: order.balance != null,
-            payment_date: order.payment_date || ''
+            payment_date: order.payment_date || '',
+            deposit_amount: order.deposit_amount || '',
+            deposit_currency: order.deposit_currency || ''
         });
+        setActiveTab('basic');
+        setShowOrderModal(true);
         setProductSearch('');
     };
 
@@ -340,14 +358,18 @@ export default function ShipmentOrders({ currentUser, initialEditId, onClearEdit
             invoice_no: '',
             shipper: '',
             products: [],
+            product_details: {},
             est_date: '',
             note: '',
             status: 'open',
             depositPaid: false,
             balancePaid: false,
-            payment_date: ''
+            payment_date: '',
+            deposit_amount: '',
+            deposit_currency: ''
         });
         setProductSearch('');
+        setShowOrderModal(false);
     };
 
     const getStatusColor = (status) => {
@@ -430,17 +452,17 @@ export default function ShipmentOrders({ currentUser, initialEditId, onClearEdit
                             if (item.shipment_id) {
                                 if (!shipmentToContainer[item.shipment_id]) shipmentToContainer[item.shipment_id] = new Set();
                                 shipmentToContainer[item.shipment_id].add(c.cntr_no || 'Unknown');
-                                
+
                                 if (item.hbl_no) {
                                     if (!shipmentToHbl[item.shipment_id]) shipmentToHbl[item.shipment_id] = new Set();
                                     shipmentToHbl[item.shipment_id].add(item.hbl_no);
                                 }
                             }
                         });
-                    } catch(e){}
+                    } catch (e) { }
                 }
             });
-        } catch(e) {
+        } catch (e) {
             console.error("Failed to load containers for export mapping", e);
         }
 
@@ -455,7 +477,12 @@ export default function ShipmentOrders({ currentUser, initialEditId, onClearEdit
                 if (col === 'shipper_name') {
                     htmlRows += `<td>${getShipperName(order.shipper)}</td>`;
                 } else if (col === 'products') {
-                htmlRows += `<td>${getProductsList(order.products).map(p => p.name).join('<br/>')}</td>`;
+                    const productsHtml = getProductsList(order.products).map(p => {
+                        const isContainerized = order.containerized_products?.includes(p.id);
+                        const bg = isContainerized ? '#fef08a' : 'transparent';
+                        return `<span style="background-color: ${bg}; padding: 2px 4px; border-radius: 2px; display: inline-block; margin-bottom: 2px;">${p.name}</span>`;
+                    }).join('<br/>');
+                    htmlRows += `<td>${productsHtml}</td>`;
                 } else if (col === 'deposit') {
                     htmlRows += `<td>${dRate}%: ${order.deposit != null ? 'Paid' : 'Pending'}${order.payment_date && order.deposit != null ? `<br/>Date: ${order.payment_date}` : ''}</td>`;
                 } else if (col === 'balance') {
@@ -551,7 +578,7 @@ export default function ShipmentOrders({ currentUser, initialEditId, onClearEdit
                         <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
                             <h2 style={{ margin: 0, fontSize: '1.25rem', color: '#1e293b' }}>Shipment Orders</h2>
                             {canWrite && (
-                                <button className="btn-primary" onClick={resetForm} style={{ display: 'flex', alignItems: 'center', gap: '2px', marginLeft: '12px' }}>
+                                <button className="btn-primary" onClick={() => { resetForm(); setShowOrderModal(true); }} style={{ display: 'flex', alignItems: 'center', gap: '2px', marginLeft: '12px' }}>
                                     <Plus size={16} /> Add Order
                                 </button>
                             )}
@@ -690,31 +717,35 @@ export default function ShipmentOrders({ currentUser, initialEditId, onClearEdit
                                                                     <span>{bRate}%</span>
                                                                 </label>
                                                             )}
+                                                            {order.deposit_paid_date && (
+                                                                <div style={{ marginLeft: '8px', color: '#ffffff', backgroundColor: 'rgb(16 185 129)', padding: '1px 4px 2px', MarginTop: '-1px' }}>Date: {order.deposit_paid_date}</div>
+                                                            )}
                                                             {order.payment_date && (
-                                                                <div style={{ marginLeft: '8px', color: '#ffffff', backgroundColor: 'rgb(16 185 129)', padding: '1px 4px 2px', MarginTop: '-1px' }}>Date: {order.payment_date}</div>
+                                                                <div style={{ marginLeft: '8px', color: '#ffffff', backgroundColor: 'rgb(16 185 129)', padding: '1px 4px 2px', MarginTop: '-1px', display: 'inline-block' }}>Date: {order.payment_date}</div>
                                                             )}
                                                         </div>
                                                     );
                                                 })()}
                                             </td>}
                                             {visibleColumns.includes('products') && <td>
-                                <div className="readonly-cell" style={{ display: 'flex', flexDirection: 'column', gap: '4px', fontSize: '0.85rem' }}>
-                                    {getProductsList(order.products).map((prod, idx) => {
-                                        const isContainerized = order.containerized_products?.includes(prod.id);
-                                        return (
-                                        <div key={idx} style={{
-                                            backgroundColor: isContainerized ? '#fef08a' : '#f1f5f9',
-                                            padding: '2px 6px',
-                                            borderRadius: '4px',
-                                            whiteSpace: 'nowrap',
-                                            overflow: 'hidden',
-                                            textOverflow: 'ellipsis'
-                                        }}>
-                                            {prod.name}
-                                        </div>
-                                    )})}
-                                </div>
-                            </td>}
+                                                <div className="readonly-cell" style={{ display: 'flex', flexDirection: 'column', gap: '4px', fontSize: '0.85rem' }}>
+                                                    {getProductsList(order.products).map((prod, idx) => {
+                                                        const isContainerized = order.containerized_products?.includes(prod.id);
+                                                        return (
+                                                            <div key={idx} style={{
+                                                                backgroundColor: isContainerized ? '#fef08a' : '#f1f5f9',
+                                                                padding: '2px 6px',
+                                                                borderRadius: '4px',
+                                                                whiteSpace: 'nowrap',
+                                                                overflow: 'hidden',
+                                                                textOverflow: 'ellipsis'
+                                                            }}>
+                                                                {prod.name}
+                                                            </div>
+                                                        )
+                                                    })}
+                                                </div>
+                                            </td>}
                                             {visibleColumns.includes('est_date') && <td><div className="readonly-cell">{order.est_date}</div></td>}
                                             {visibleColumns.includes('note') && <td>
                                                 <div className="readonly-cell" style={{ whiteSpace: 'pre-wrap', fontSize: '0.85rem', color: '#475569' }}>
@@ -730,223 +761,533 @@ export default function ShipmentOrders({ currentUser, initialEditId, onClearEdit
                 </div>
             </div>
 
-            {/* Right Pane - Form */}
-            {canWrite && (
-                <div style={{ width: '400px', backgroundColor: 'white', display: 'flex', flexDirection: 'column' }}>
-                    <div style={{ padding: '20px 24px', borderBottom: '1px solid #e2e8f0', backgroundColor: '#f8fafc' }}>
-                        <h3 style={{ margin: 0, fontSize: '1.1rem', color: '#1e293b' }}>
-                            {formMode === 'add' ? 'New Shipment Order' : 'Edit Shipment Order'}
-                        </h3>
-                    </div>
-                    <div style={{ flex: 1, overflowY: 'auto', padding: '24px' }}>
-                        <form id="shipment-form" onSubmit={handleSave} style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+            {canWrite && showOrderModal && (
+                <div className="modal-overlay">
+                    <div className="modal-content" style={{ width: '750px', maxWidth: '750px', maxHeight: '90vh', display: 'flex', flexDirection: 'column' }}>
+                        <div className="modal-header">
+                            <h2>{formMode === 'edit' ? 'Edit Shipment Order' : 'Add Shipment Order'}</h2>
+                            <button className="btn-icon" onClick={resetForm}>
+                                <XCircle size={20} />
+                            </button>
+                        </div>
+                        <div style={{ display: 'flex', borderBottom: '1px solid #e2e8f0', padding: '0 24px' }}>
+                            <button style={{ padding: '12px 16px', border: 'none', background: 'none', cursor: 'pointer', fontWeight: activeTab === 'basic' ? 600 : 400, color: activeTab === 'basic' ? '#3b82f6' : '#64748b', borderBottom: activeTab === 'basic' ? '2px solid #3b82f6' : '2px solid transparent' }} onClick={() => setActiveTab('basic')}>
+                                Basic
+                            </button>
+                            <button style={{ padding: '12px 16px', border: 'none', background: 'none', cursor: 'pointer', fontWeight: activeTab === 'payment' ? 600 : 400, color: activeTab === 'payment' ? '#3b82f6' : '#64748b', borderBottom: activeTab === 'payment' ? '2px solid #3b82f6' : '2px solid transparent' }} onClick={() => setActiveTab('payment')}>
+                                Payment
+                            </button>
+                            {formMode === 'edit' && (
+                                <button style={{ padding: '12px 16px', border: 'none', background: 'none', cursor: 'pointer', fontWeight: activeTab === 'products' ? 600 : 400, color: activeTab === 'products' ? '#3b82f6' : '#64748b', borderBottom: activeTab === 'products' ? '2px solid #3b82f6' : '2px solid transparent' }} onClick={() => setActiveTab('products')}>
+                                    Products
+                                </button>
+                            )}
+                        </div>
+                        <div className="modal-body" style={{ flex: 1, overflowY: 'auto', padding: '24px' }}>
+                            {activeTab === 'basic' ? (
+                                <form id="shipment-form" onSubmit={handleSave} style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
 
-                            <div className="form-group">
-                                <label style={{ display: 'block', marginBottom: '6px', fontWeight: 500, fontSize: '0.9rem', color: '#475569' }}>Invoice No.</label>
-                                <input
-                                    type="text"
-                                    name="invoice_no"
-                                    value={formData.invoice_no}
-                                    onChange={handleFormChange}
-                                    style={{ width: '100%', padding: '8px 12px', border: '1px solid #cbd5e1', borderRadius: '4px', outline: 'none' }}
-                                />
-                            </div>
+                                    <div className="form-group">
+                                        <label style={{ display: 'block', marginBottom: '6px', fontWeight: 500, fontSize: '0.9rem', color: '#475569' }}>Invoice No.</label>
+                                        <input
+                                            type="text"
+                                            name="invoice_no"
+                                            value={formData.invoice_no}
+                                            onChange={handleFormChange}
+                                            style={{ width: '100%', padding: '8px 12px', border: '1px solid #cbd5e1', borderRadius: '4px', outline: 'none' }}
+                                        />
+                                    </div>
 
-                            <div className="form-group">
-                                <label style={{ display: 'block', marginBottom: '6px', fontWeight: 500, fontSize: '0.9rem', color: '#475569' }}>Shipper</label>
-                                <select
-                                    name="shipper"
-                                    value={formData.shipper}
-                                    onChange={handleFormChange}
-                                    required
-                                    style={{ width: '100%', padding: '8px 12px', border: '1px solid #cbd5e1', borderRadius: '4px', outline: 'none', background: 'white' }}
-                                >
-                                    <option value="" disabled>Select Shipper</option>
-                                    {shippers.map(s => (
-                                        <option key={s.shipper_id} value={s.shipper_id}>{s.shipper_name}</option>
-                                    ))}
-                                </select>
-                            </div>
+                                    <div className="form-group">
+                                        <label style={{ display: 'block', marginBottom: '6px', fontWeight: 500, fontSize: '0.9rem', color: '#475569' }}>Shipper</label>
+                                        <select
+                                            name="shipper"
+                                            value={formData.shipper}
+                                            onChange={handleFormChange}
+                                            required
+                                            style={{ width: '100%', padding: '8px 12px', border: '1px solid #cbd5e1', borderRadius: '4px', outline: 'none', background: 'white' }}
+                                        >
+                                            <option value="" disabled>Select Shipper</option>
+                                            {shippers.map(s => (
+                                                <option key={s.shipper_id} value={s.shipper_id}>{s.shipper_name}</option>
+                                            ))}
+                                        </select>
+                                    </div>
 
-                            <div className="form-group" style={{ display: 'flex', flexDirection: 'column', flex: 1 }}>
-                                <label style={{ display: 'block', marginBottom: '6px', fontWeight: 500, fontSize: '0.9rem', color: '#475569' }}>Products (Backordered)</label>
-                                <div style={{ position: 'relative', marginBottom: '8px' }}>
-                                    <Search size={14} style={{ position: 'absolute', left: '8px', top: '50%', transform: 'translateY(-50%)', color: '#94a3b8' }} />
-                                    <input
-                                        type="text"
-                                        placeholder="Search inventory..."
-                                        value={productSearch}
-                                        onChange={(e) => setProductSearch(e.target.value)}
-                                        style={{ width: '100%', padding: '6px 8px 6px 28px', border: '1px solid #cbd5e1', borderRadius: '4px', outline: 'none', fontSize: '0.85rem' }}
-                                    />
-                                </div>
-                                <div style={{
-                                    border: '1px solid #cbd5e1',
-                                    borderRadius: '4px',
-                                    maxHeight: '200px',
-                                    overflowY: 'auto',
-                                    backgroundColor: 'white'
-                                }}>
-                                    {filteredInventory.map(i => {
-                                        const isSelected = formData.products.includes(i.product_id.toString());
-                                        return (
-                                            <div
-                                                key={i.product_id}
-                                                onClick={() => toggleProduct(i.product_id)}
-                                                style={{
-                                                    padding: '6px 10px',
-                                                    borderBottom: '1px solid #f1f5f9',
-                                                    cursor: 'pointer',
-                                                    display: 'flex',
-                                                    alignItems: 'center',
-                                                    gap: '8px',
-                                                    backgroundColor: isSelected ? 'rgba(59, 130, 246, 0.1)' : 'transparent',
-                                                    fontSize: '0.85rem'
-                                                }}
-                                            >
-                                                <div style={{
-                                                    width: '14px', height: '14px',
-                                                    border: '1px solid #cbd5e1',
-                                                    borderRadius: '3px',
-                                                    display: 'flex', alignItems: 'center', justifyContent: 'center',
-                                                    backgroundColor: isSelected ? '#3b82f6' : 'transparent',
-                                                    borderColor: isSelected ? '#3b82f6' : '#cbd5e1',
-                                                    flexShrink: 0
-                                                }}>
-                                                    {isSelected && <Check size={10} color="white" />}
-                                                </div>
-                                                {i.sku} - {i.sales_description}
-                                            </div>
-                                        );
-                                    })}
-                                    {filteredInventory.length === 0 && (
-                                        <div style={{ padding: '8px', textAlign: 'center', color: '#94a3b8', fontSize: '0.85rem' }}>No products found.</div>
-                                    )}
-                                </div>
-                            </div>
+                                    <div className="form-group" style={{ gridColumn: '1 / -1' }}>
+                                        <label style={{ display: 'block', marginBottom: '6px', fontWeight: 500, fontSize: '0.9rem', color: '#475569' }}>Note</label>
+                                        <textarea
+                                            name="note"
+                                            value={formData.note}
+                                            onChange={handleFormChange}
+                                            rows="3"
+                                            style={{ width: '100%', padding: '8px 12px', border: '1px solid #cbd5e1', borderRadius: '4px', outline: 'none', resize: 'vertical' }}
+                                        />
+                                    </div>
 
-                            <div className="form-group">
-                                <label style={{ display: 'block', marginBottom: '6px', fontWeight: 500, fontSize: '0.9rem', color: '#475569' }}>Estimated Date</label>
-                                <input
-                                    type="date"
-                                    name="est_date"
-                                    value={formData.est_date}
-                                    onChange={handleFormChange}
-                                    style={{ width: '100%', padding: '8px 12px', border: '1px solid #cbd5e1', borderRadius: '4px', outline: 'none' }}
-                                />
-                            </div>
-
-                            <div className="form-group" style={{ padding: '12px', backgroundColor: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '6px' }}>
-                                <label style={{ display: 'block', marginBottom: '8px', fontWeight: 500, fontSize: '0.9rem', color: '#475569' }}>Payment Status</label>
-                                {!formData.shipper ? (
-                                    <div style={{ fontSize: '0.85rem', color: '#94a3b8' }}>Please select a Shipper first.</div>
-                                ) : (
-                                    <div style={{ display: 'flex', gap: '16px', alignItems: 'center', flexWrap: 'wrap' }}>
-                                        <label style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer', fontSize: '0.9rem' }}>
+                                    <div className="form-group" style={{ gridColumn: '1 / -1' }}>
+                                        <label style={{ display: 'block', marginBottom: '6px', fontWeight: 500, fontSize: '0.9rem', color: '#475569' }}>Products (Backordered)</label>
+                                        <div style={{ position: 'relative', marginBottom: '8px' }}>
+                                            <Search size={14} style={{ position: 'absolute', left: '8px', top: '50%', transform: 'translateY(-50%)', color: '#94a3b8' }} />
                                             <input
-                                                type="checkbox"
-                                                checked={formData.depositPaid}
-                                                onChange={(e) => {
-                                                    const checked = e.target.checked;
-                                                    const shipper = shippers.find(s => s.shipper_id == formData.shipper);
-                                                    const rate = shipper ? (shipper.deposit || 0) : 0;
-                                                    setFormData(p => {
-                                                        let bp = p.balancePaid;
-                                                        let pd = p.payment_date;
-                                                        if (rate === 100) {
-                                                            bp = checked;
-                                                            pd = (checked && !pd) ? getLocalTodayStrSync() : (checked ? pd : '');
-                                                        }
-                                                        return { ...p, depositPaid: checked, balancePaid: bp, payment_date: pd };
-                                                    });
-                                                }}
+                                                type="text"
+                                                placeholder="Search inventory..."
+                                                value={productSearch}
+                                                onChange={(e) => setProductSearch(e.target.value)}
+                                                style={{ width: '100%', padding: '6px 8px 6px 28px', border: '1px solid #cbd5e1', borderRadius: '4px', outline: 'none', fontSize: '0.85rem' }}
                                             />
-                                            {(() => {
-                                                const s = shippers.find(x => x.shipper_id == formData.shipper);
-                                                return `Deposit (${s ? (s.deposit || 0) : 0}%)`;
-                                            })()}
-                                        </label>
-
-                                        {(() => {
-                                            const s = shippers.find(x => x.shipper_id == formData.shipper);
-                                            const rate = s ? (s.deposit || 0) : 0;
-                                            if (rate < 100) {
+                                        </div>
+                                        <div style={{
+                                            border: '1px solid #cbd5e1',
+                                            borderRadius: '4px',
+                                            maxHeight: '200px',
+                                            overflowY: 'auto',
+                                            backgroundColor: 'white'
+                                        }}>
+                                            {filteredInventory.map(i => {
+                                                const isSelected = formData.products.includes(i.product_id.toString());
                                                 return (
+                                                    <div
+                                                        key={i.product_id}
+                                                        onClick={() => toggleProduct(i.product_id)}
+                                                        style={{
+                                                            padding: '6px 10px',
+                                                            borderBottom: '1px solid #f1f5f9',
+                                                            cursor: 'pointer',
+                                                            display: 'flex',
+                                                            alignItems: 'center',
+                                                            gap: '8px',
+                                                            backgroundColor: isSelected ? 'rgba(59, 130, 246, 0.1)' : 'transparent',
+                                                            fontSize: '0.85rem'
+                                                        }}
+                                                    >
+                                                        <div style={{
+                                                            width: '14px', height: '14px',
+                                                            border: '1px solid #cbd5e1',
+                                                            borderRadius: '3px',
+                                                            display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                                            backgroundColor: isSelected ? '#3b82f6' : 'transparent',
+                                                            borderColor: isSelected ? '#3b82f6' : '#cbd5e1',
+                                                            flexShrink: 0
+                                                        }}>
+                                                            {isSelected && <Check size={10} color="white" />}
+                                                        </div>
+                                                        {i.sku} - {i.sales_description}
+                                                    </div>
+                                                );
+                                            })}
+                                            {filteredInventory.length === 0 && (
+                                                <div style={{ padding: '8px', textAlign: 'center', color: '#94a3b8', fontSize: '0.85rem' }}>No products found.</div>
+                                            )}
+                                        </div>
+                                    </div>
+
+                                    {formData.products.length > 0 && (
+                                        <div className="form-group" style={{ gridColumn: '1 / -1' }}>
+                                            <label style={{ display: 'block', marginBottom: '6px', fontWeight: 500, fontSize: '0.9rem', color: '#475569' }}>Backorder Details</label>
+                                            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.85rem' }}>
+                                                <thead>
+                                                    <tr style={{ background: '#f1f5f9' }}>
+                                                        <th style={{ padding: '8px', border: '1px solid #cbd5e1', textAlign: 'left' }}>Product Name</th>
+                                                        <th style={{ padding: '8px', border: '1px solid #cbd5e1', textAlign: 'right', width: '100px' }}>SQM</th>
+                                                        <th style={{ padding: '8px', border: '1px solid #cbd5e1', textAlign: 'right', width: '120px' }}>SQM Price (USD/EUR)</th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody>
+                                                    {formData.products.map(id => {
+                                                        const item = inventory.find(i => i.product_id.toString() === id);
+                                                        const details = formData.product_details[id] || { sqm: '', price: '' };
+                                                        return (
+                                                            <tr key={id}>
+                                                                <td style={{ padding: '8px', border: '1px solid #cbd5e1' }}>
+                                                                    {item ? `${item.sku} - ${item.sales_description}` : `[ID: ${id}]`}
+                                                                </td>
+                                                                <td style={{ padding: '4px', border: '1px solid #cbd5e1' }}>
+                                                                    <input
+                                                                        type="number"
+                                                                        value={details.sqm}
+                                                                        onChange={(e) => handleProductDetailChange(id, 'sqm', e.target.value)}
+                                                                        style={{ width: '100%', padding: '4px', border: '1px solid #cbd5e1', borderRadius: '3px', outline: 'none', textAlign: 'right' }}
+                                                                    />
+                                                                </td>
+                                                                <td style={{ padding: '4px', border: '1px solid #cbd5e1' }}>
+                                                                    <input
+                                                                        type="number"
+                                                                        value={details.price}
+                                                                        onChange={(e) => handleProductDetailChange(id, 'price', e.target.value)}
+                                                                        style={{ width: '100%', padding: '4px', border: '1px solid #cbd5e1', borderRadius: '3px', outline: 'none', textAlign: 'right' }}
+                                                                    />
+                                                                </td>
+                                                            </tr>
+                                                        );
+                                                    })}
+                                                </tbody>
+                                            </table>
+                                        </div>
+                                    )}
+
+                                    <div className="form-group" style={{ padding: '12px', backgroundColor: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '6px' }}>
+                                        <label style={{ display: 'block', marginBottom: '8px', fontWeight: 500, fontSize: '0.9rem', color: '#475569' }}>Payment Status</label>
+                                        {!formData.shipper ? (
+                                            <div style={{ fontSize: '0.85rem', color: '#94a3b8' }}>Please select a Shipper first.</div>
+                                        ) : (
+                                            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', width: '100%' }}>
+                                                <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
                                                     <label style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer', fontSize: '0.9rem' }}>
                                                         <input
                                                             type="checkbox"
-                                                            checked={formData.balancePaid}
+                                                            checked={formData.depositPaid}
                                                             onChange={(e) => {
                                                                 const checked = e.target.checked;
-                                                                setFormData(p => ({
-                                                                    ...p,
-                                                                    balancePaid: checked,
-                                                                    payment_date: (checked && p.depositPaid && !p.payment_date) ? getLocalTodayStrSync() : p.payment_date
-                                                                }));
+                                                                const shipper = shippers.find(s => s.shipper_id == formData.shipper);
+                                                                const rate = shipper ? (shipper.deposit || 0) : 0;
+                                                                setFormData(p => {
+                                                                    let bp = p.balancePaid;
+                                                                    let pd = p.payment_date;
+                                                                    let dpd = p.deposit_paid_date;
+                                                                    dpd = (checked && !dpd) ? getLocalTodayStrSync() : (checked ? dpd : '');
+                                                                    if (rate === 100) {
+                                                                        bp = checked;
+                                                                        pd = (checked && !pd) ? getLocalTodayStrSync() : (checked ? pd : '');
+                                                                    }
+                                                                    return { ...p, depositPaid: checked, balancePaid: bp, payment_date: pd, deposit_paid_date: dpd };
+                                                                });
                                                             }}
                                                         />
-                                                        {`Balance (${100 - rate}%)`}
+                                                        {(() => {
+                                                            const s = shippers.find(x => x.shipper_id == formData.shipper);
+                                                            return `Deposit (${s ? (s.deposit || 0) : 0}%)`;
+                                                        })()}
                                                     </label>
-                                                );
-                                            }
-                                            return null;
-                                        })()}
-
-                                        {formData.depositPaid && (formData.balancePaid || (() => {
-                                            const s = shippers.find(x => x.shipper_id == formData.shipper);
-                                            return s && s.deposit === 100;
-                                        })()) && (
-                                                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginLeft: 'auto' }}>
-                                                    <span style={{ fontSize: '0.85rem', color: '#64748b' }}>Payment Date:</span>
-                                                    <input
-                                                        type="date"
-                                                        name="payment_date"
-                                                        value={formData.payment_date}
-                                                        onChange={handleFormChange}
-                                                        style={{ padding: '4px 8px', border: '1px solid #cbd5e1', borderRadius: '4px', outline: 'none', fontSize: '0.85rem' }}
-                                                    />
+                                                    {formData.depositPaid && (
+                                                        <input
+                                                            type="date"
+                                                            name="deposit_paid_date"
+                                                            value={formData.deposit_paid_date}
+                                                            onChange={handleFormChange}
+                                                            style={{ padding: '4px 8px', border: '1px solid #cbd5e1', borderRadius: '4px', outline: 'none', fontSize: '0.85rem' }}
+                                                        />
+                                                    )}
                                                 </div>
-                                            )}
+
+                                                {(() => {
+                                                    const shipper = shippers.find(s => s.shipper_id == formData.shipper);
+                                                    const rate = shipper ? (shipper.deposit || 0) : 0;
+                                                    if (rate < 100) {
+                                                        return (
+                                                            <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                                                                <label style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer', fontSize: '0.9rem' }}>
+                                                                    <input
+                                                                        type="checkbox"
+                                                                        checked={formData.balancePaid}
+                                                                        onChange={(e) => {
+                                                                            const checked = e.target.checked;
+                                                                            setFormData(p => ({
+                                                                                ...p,
+                                                                                balancePaid: checked,
+                                                                                payment_date: (checked && !p.payment_date) ? getLocalTodayStrSync() : p.payment_date
+                                                                            }));
+                                                                        }}
+                                                                    />
+                                                                    {`Balance (${100 - rate}%)`}
+                                                                </label>
+                                                                {formData.balancePaid && (
+                                                                    <input
+                                                                        type="date"
+                                                                        name="payment_date"
+                                                                        value={formData.payment_date}
+                                                                        onChange={handleFormChange}
+                                                                        style={{ padding: '4px 8px', border: '1px solid #cbd5e1', borderRadius: '4px', outline: 'none', fontSize: '0.85rem' }}
+                                                                    />
+                                                                )}
+                                                            </div>
+                                                        );
+                                                    }
+                                                    return null;
+                                                })()}
+                                            </div>
+                                        )}
                                     </div>
-                                )}
-                            </div>
 
-                            <div className="form-group">
-                                <label style={{ display: 'block', marginBottom: '6px', fontWeight: 500, fontSize: '0.9rem', color: '#475569' }}>Note</label>
-                                <textarea
-                                    name="note"
-                                    value={formData.note}
-                                    onChange={handleFormChange}
-                                    rows="3"
-                                    style={{ width: '100%', padding: '8px 12px', border: '1px solid #cbd5e1', borderRadius: '4px', outline: 'none', resize: 'vertical' }}
-                                />
-                            </div>
+                                    <div className="form-group" style={{ padding: '12px', backgroundColor: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '6px' }}>
+                                        <label style={{ display: 'block', marginBottom: '8px', fontWeight: 500, fontSize: '0.9rem', color: '#475569' }}>Deposit Details</label>
+                                        <div style={{ display: 'flex', gap: '16px' }}>
+                                            <div style={{ flex: 1 }}>
+                                                <label style={{ display: 'block', marginBottom: '4px', fontSize: '0.85rem', color: '#64748b' }}>Amount (USD/EUR)</label>
+                                                <input
+                                                    type="number"
+                                                    step="0.01"
+                                                    name="deposit_amount"
+                                                    value={formData.deposit_amount}
+                                                    onChange={handleFormChange}
+                                                    style={{ width: '100%', padding: '6px 8px', border: '1px solid #cbd5e1', borderRadius: '4px', outline: 'none' }}
+                                                />
+                                            </div>
+                                            <div style={{ flex: 1 }}>
+                                                <label style={{ display: 'block', marginBottom: '4px', fontSize: '0.85rem', color: '#64748b' }}>Currency Rate</label>
+                                                <input
+                                                    type="number"
+                                                    step="0.000001"
+                                                    name="deposit_currency"
+                                                    value={formData.deposit_currency}
+                                                    onChange={handleFormChange}
+                                                    style={{ width: '100%', padding: '6px 8px', border: '1px solid #cbd5e1', borderRadius: '4px', outline: 'none' }}
+                                                />
+                                            </div>
+                                        </div>
+                                    </div>
 
-                            {formMode === 'edit' && (
-                                <div className="form-group">
-                                    <label style={{ display: 'block', marginBottom: '6px', fontWeight: 500, fontSize: '0.9rem', color: '#475569' }}>Status</label>
-                                    <select
-                                        name="status"
-                                        value={formData.status}
-                                        onChange={handleFormChange}
-                                        style={{ width: '100%', padding: '8px 12px', border: '1px solid #cbd5e1', borderRadius: '4px', outline: 'none', background: 'white' }}
-                                    >
-                                        <option value="open">Open</option>
-                                        <option value="processing">Processing</option>
-                                        <option value="closed">Closed</option>
-                                    </select>
+                                    <div className="form-group">
+                                        <label style={{ display: 'block', marginBottom: '6px', fontWeight: 500, fontSize: '0.9rem', color: '#475569' }}>Estimated Date</label>
+                                        <input
+                                            type="date"
+                                            name="est_date"
+                                            value={formData.est_date}
+                                            onChange={handleFormChange}
+                                            style={{ width: '100%', padding: '8px 12px', border: '1px solid #cbd5e1', borderRadius: '4px', outline: 'none' }}
+                                        />
+                                    </div>
+
+                                    {formMode === 'edit' && (
+                                        <div className="form-group">
+                                            <label style={{ display: 'block', marginBottom: '6px', fontWeight: 500, fontSize: '0.9rem', color: '#475569' }}>Status</label>
+                                            <select
+                                                name="status"
+                                                value={formData.status}
+                                                onChange={handleFormChange}
+                                                style={{ width: '100%', padding: '8px 12px', border: '1px solid #cbd5e1', borderRadius: '4px', outline: 'none', background: 'white' }}
+                                            >
+                                                <option value="open">Open</option>
+                                                <option value="processing">Processing</option>
+                                                <option value="closed">Closed</option>
+                                            </select>
+                                        </div>
+                                    )}
+
+                                </form>
+                            ) : activeTab === 'products' ? (
+                                <div style={{ padding: '24px', color: '#334155' }}>
+                                    {(() => {
+                                        let associatedContainers = [];
+                                        if (editingId) {
+                                            associatedContainers = allContainers.filter(c => {
+                                                if (!c.contents) return false;
+                                                try {
+                                                    const arr = typeof c.contents === 'string' ? JSON.parse(c.contents) : c.contents;
+                                                    return arr.some(item => item.shipment_id && item.shipment_id.toString() === editingId.toString());
+                                                } catch (e) {
+                                                    return false;
+                                                }
+                                            });
+                                        }
+
+                                        const overallStatus = formData.products.map(id => {
+                                            const item = inventory.find(i => i.product_id.toString() === id);
+                                            const details = formData.product_details[id] || {};
+                                            const orderedSqm = parseFloat(details.sqm) || 0;
+
+                                            let shippedSqm = 0;
+                                            associatedContainers.forEach(c => {
+                                                try {
+                                                    const arr = typeof c.contents === 'string' ? JSON.parse(c.contents) : c.contents;
+                                                    const block = arr.find(item => item.shipment_id && item.shipment_id.toString() === editingId.toString());
+                                                    if (block && block.products) {
+                                                        const pMatch = block.products.find(p => p.product_id && p.product_id.toString() === id.toString());
+                                                        if (pMatch) shippedSqm += (parseFloat(pMatch.sqm) || 0);
+                                                    }
+                                                } catch (e) { }
+                                            });
+
+                                            const remainingSqm = Math.max(0, orderedSqm - shippedSqm);
+                                            return { id, name: item ? `${item.sku} - ${item.sales_description}` : `[ID: ${id}]`, orderedSqm, shippedSqm, remainingSqm };
+                                        });
+
+                                        const containerBreakdowns = associatedContainers.map(c => {
+                                            const arr = typeof c.contents === 'string' ? JSON.parse(c.contents) : c.contents;
+                                            const block = arr.find(item => item.shipment_id && item.shipment_id.toString() === editingId.toString());
+                                            const productsInContainer = block && block.products ? block.products.map(p => {
+                                                const item = inventory.find(i => i.product_id.toString() === p.product_id.toString());
+                                                return {
+                                                    id: p.product_id,
+                                                    name: item ? `${item.sku} - ${item.sales_description}` : `[ID: ${p.product_id}]`,
+                                                    sqm: parseFloat(p.sqm) || 0,
+                                                    weight: parseFloat(p.weight) || 0
+                                                };
+                                            }) : [];
+                                            return { cntr_no: c.cntr_no || 'Unknown', products: productsInContainer };
+                                        });
+
+                                        return (
+                                            <div>
+                                                <h3 style={{ margin: '0 0 16px 0', borderBottom: '1px solid #e2e8f0', paddingBottom: '8px' }}>Overall Products Status</h3>
+                                                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.85rem', marginBottom: '32px' }}>
+                                                    <thead>
+                                                        <tr style={{ background: '#f1f5f9', borderBottom: '1px solid #cbd5e1' }}>
+                                                            <th style={{ padding: '8px', textAlign: 'left', border: '1px solid #cbd5e1' }}>Product Name</th>
+                                                            <th style={{ padding: '8px', textAlign: 'right', border: '1px solid #cbd5e1' }}>Ordered (SQM)</th>
+                                                            <th style={{ padding: '8px', textAlign: 'right', border: '1px solid #cbd5e1' }}>Shipped (SQM)</th>
+                                                            <th style={{ padding: '8px', textAlign: 'right', border: '1px solid #cbd5e1' }}>Remaining (SQM)</th>
+                                                        </tr>
+                                                    </thead>
+                                                    <tbody>
+                                                        {overallStatus.length === 0 ? (
+                                                            <tr><td colSpan="4" style={{ padding: '16px', textAlign: 'center', color: '#94a3b8' }}>No products found</td></tr>
+                                                        ) : overallStatus.map(p => (
+                                                            <tr key={p.id}>
+                                                                <td style={{ padding: '8px', border: '1px solid #cbd5e1' }}>{p.name}</td>
+                                                                <td style={{ padding: '8px', textAlign: 'right', border: '1px solid #cbd5e1' }}>{p.orderedSqm.toFixed(2)}</td>
+                                                                <td style={{ padding: '8px', textAlign: 'right', border: '1px solid #cbd5e1', color: '#10b981' }}>{p.shippedSqm.toFixed(2)}</td>
+                                                                <td style={{ padding: '8px', textAlign: 'right', border: '1px solid #cbd5e1', color: p.remainingSqm > 0 ? '#f59e0b' : 'inherit' }}>{p.remainingSqm.toFixed(2)}</td>
+                                                            </tr>
+                                                        ))}
+                                                    </tbody>
+                                                </table>
+
+                                                <h3 style={{ margin: '0 0 16px 0', borderBottom: '1px solid #e2e8f0', paddingBottom: '8px' }}>Per Container Breakdown</h3>
+                                                {containerBreakdowns.length === 0 ? (
+                                                    <div style={{ color: '#94a3b8', fontSize: '0.85rem', padding: '16px', textAlign: 'center', background: '#f8fafc', borderRadius: '4px' }}>No dispatched containers found</div>
+                                                ) : containerBreakdowns.map((cb, idx) => (
+                                                    <div key={idx} style={{ marginBottom: '16px', border: '1px solid #e2e8f0', borderRadius: '4px', overflow: 'hidden' }}>
+                                                        <div style={{ padding: '8px 12px', background: '#f1f5f9', fontWeight: 600, borderBottom: '1px solid #e2e8f0' }}>Container: {cb.cntr_no}</div>
+                                                        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.85rem' }}>
+                                                            <thead>
+                                                                <tr>
+                                                                    <th style={{ padding: '8px', textAlign: 'left', borderBottom: '1px solid #cbd5e1' }}>Product Name</th>
+                                                                    <th style={{ padding: '8px', textAlign: 'right', borderBottom: '1px solid #cbd5e1' }}>Shipped (SQM)</th>
+                                                                    <th style={{ padding: '8px', textAlign: 'right', borderBottom: '1px solid #cbd5e1' }}>Weight (kg)</th>
+                                                                </tr>
+                                                            </thead>
+                                                            <tbody>
+                                                                {cb.products.length === 0 ? (
+                                                                    <tr><td colSpan="3" style={{ padding: '16px', textAlign: 'center', color: '#94a3b8' }}>No products in this container</td></tr>
+                                                                ) : cb.products.map(p => (
+                                                                    <tr key={p.id}>
+                                                                        <td style={{ padding: '8px', borderBottom: '1px solid #f1f5f9' }}>{p.name}</td>
+                                                                        <td style={{ padding: '8px', textAlign: 'right', borderBottom: '1px solid #f1f5f9' }}>{p.sqm.toFixed(2)}</td>
+                                                                        <td style={{ padding: '8px', textAlign: 'right', borderBottom: '1px solid #f1f5f9' }}>{p.weight.toFixed(2)}</td>
+                                                                    </tr>
+                                                                ))}
+                                                            </tbody>
+                                                        </table>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        );
+                                    })()}
+                                </div>
+                            ) : (
+                                <div style={{ padding: '24px', color: '#334155' }}>
+                                    <h3 style={{ margin: '0 0 16px 0', borderBottom: '1px solid #e2e8f0', paddingBottom: '8px' }}>Payment Details</h3>
+                                    {(() => {
+                                        let associatedContainers = [];
+                                        let totalContainerDeposits = 0;
+                                        let remainingBalance = 0;
+
+                                        if (editingId) {
+                                            const shipperObj = shippers.find(s => s.shipper_id == formData.shipper);
+                                            const depositRate = shipperObj ? (parseFloat(shipperObj.deposit) || 0) : 0;
+                                            const balanceRate = (100 - depositRate) / 100;
+
+                                            associatedContainers = allContainers.filter(c => {
+                                                if (!c.contents) return false;
+                                                try {
+                                                    const arr = typeof c.contents === 'string' ? JSON.parse(c.contents) : c.contents;
+                                                    return arr.some(item => item.shipment_id && item.shipment_id.toString() === editingId.toString());
+                                                } catch (e) { return false; }
+                                            }).map(c => {
+                                                let depositAmt = 0;
+                                                let balanceAmt = 0;
+                                                let freightAmt = parseFloat(c.freight_cost) || 0;
+                                                let isBalancePaid = false;
+                                                let calculatedUnpaidBalance = 0;
+                                                try {
+                                                    const arr = typeof c.contents === 'string' ? JSON.parse(c.contents) : c.contents;
+                                                    const block = arr.find(item => item.shipment_id && item.shipment_id.toString() === editingId.toString());
+                                                    if (block) {
+                                                        depositAmt = parseFloat(block.deposit_amount) || 0;
+
+                                                        if (block.balance_amount && parseFloat(block.balance_amount) > 0) {
+                                                            balanceAmt = parseFloat(block.balance_amount);
+                                                            isBalancePaid = true;
+                                                        } else {
+                                                            let containerGoodsCost = 0;
+                                                            if (block.products) {
+                                                                block.products.forEach(p => {
+                                                                    const id = p.product_id;
+                                                                    const details = formData.product_details[id] || {};
+                                                                    const sqmPrice = parseFloat(details.price) || 0;
+                                                                    const sqm = parseFloat(p.sqm) || 0;
+                                                                    containerGoodsCost += sqm * sqmPrice;
+                                                                });
+                                                            }
+                                                            calculatedUnpaidBalance = containerGoodsCost * balanceRate;
+                                                        }
+                                                    }
+                                                } catch (e) { }
+                                                totalContainerDeposits += depositAmt;
+                                                remainingBalance += (isBalancePaid ? 0 : calculatedUnpaidBalance);
+                                                return { ...c, depositAmt, balanceAmt, freightAmt, isBalancePaid, calculatedUnpaidBalance };
+                                            });
+                                        }
+
+                                        const totalShipmentDeposit = parseFloat(formData.deposit_amount) || 0;
+                                        const unusedDeposit = totalShipmentDeposit - totalContainerDeposits;
+
+                                        return (
+                                            <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+                                                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', background: '#f8fafc', padding: '16px', borderRadius: '6px', border: '1px solid #e2e8f0' }}>
+                                                    <div>
+                                                        <span style={{ display: 'block', fontSize: '0.85rem', color: '#64748b', marginBottom: '4px' }}>Deposit Paid (AUD)</span>
+                                                        <span style={{ fontWeight: 600, fontSize: '1.1rem' }}>${totalShipmentDeposit.toFixed(2)}</span>
+                                                    </div>
+                                                    <div>
+                                                        <span style={{ display: 'block', fontSize: '0.85rem', color: '#64748b', marginBottom: '4px' }}>Unused Deposit (AUD)</span>
+                                                        <span style={{ fontWeight: 600, fontSize: '1.1rem', color: unusedDeposit >= 0 ? '#10b981' : '#ef4444' }}>${unusedDeposit.toFixed(2)}</span>
+                                                    </div>
+                                                    <div>
+                                                        <span style={{ display: 'block', fontSize: '0.85rem', color: '#64748b', marginBottom: '4px' }}>Remaining Unpaid Balance (AUD)</span>
+                                                        <span style={{ fontWeight: 600, fontSize: '1.1rem', color: remainingBalance > 0 ? '#f59e0b' : '#10b981' }}>${remainingBalance.toFixed(2)}</span>
+                                                    </div>
+                                                </div>
+
+                                                <div style={{ border: '1px solid #e2e8f0', borderRadius: '4px', overflow: 'hidden' }}>
+                                                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.85rem' }}>
+                                                        <thead style={{ background: '#f1f5f9' }}>
+                                                            <tr>
+                                                                <th style={{ padding: '8px', textAlign: 'left', borderBottom: '1px solid #e2e8f0' }}>Container No.</th>
+                                                                <th style={{ padding: '8px', textAlign: 'right', borderBottom: '1px solid #e2e8f0' }}>Deposit Utilized</th>
+                                                                <th style={{ padding: '8px', textAlign: 'right', borderBottom: '1px solid #e2e8f0' }}>Balance Paid</th>
+                                                                <th style={{ padding: '8px', textAlign: 'right', borderBottom: '1px solid #e2e8f0' }}>Freight Cost (USD/EUR)</th>
+                                                            </tr>
+                                                        </thead>
+                                                        <tbody>
+                                                            {associatedContainers.length === 0 ? (
+                                                                <tr><td colSpan="4" style={{ padding: '16px', textAlign: 'center', color: '#94a3b8' }}>No dispatched containers found</td></tr>
+                                                            ) : associatedContainers.map(c => (
+                                                                <tr key={c.container_id}>
+                                                                    <td style={{ padding: '8px', borderBottom: '1px solid #e2e8f0' }}>{c.cntr_no}</td>
+                                                                    <td style={{ padding: '8px', textAlign: 'right', borderBottom: '1px solid #e2e8f0' }}>${c.depositAmt.toFixed(2)}</td>
+                                                                    <td style={{ padding: '8px', textAlign: 'right', borderBottom: '1px solid #e2e8f0', color: c.isBalancePaid ? '#10b981' : '#f59e0b' }}>
+                                                                        {c.isBalancePaid ? `$${c.balanceAmt.toFixed(2)}` : `Unpaid ($${c.calculatedUnpaidBalance.toFixed(2)})`}
+                                                                    </td>
+                                                                    <td style={{ padding: '8px', textAlign: 'right', borderBottom: '1px solid #e2e8f0' }}>${c.freightAmt.toFixed(2)}</td>
+                                                                </tr>
+                                                            ))}
+                                                        </tbody>
+                                                    </table>
+                                                </div>
+                                            </div>
+                                        );
+                                    })()}
                                 </div>
                             )}
-
-                        </form>
-                    </div>
-                    <div style={{ padding: '16px 24px', borderTop: '1px solid #e2e8f0', backgroundColor: '#f8fafc', display: 'flex', justifyContent: 'flex-end', gap: '12px' }}>
-                        {formMode === 'edit' && (
-                            <button className="btn-secondary" onClick={resetForm} style={{ padding: '8px 16px' }}>Cancel</button>
-                        )}
-                        <button type="submit" form="shipment-form" className="btn-primary" style={{ padding: '8px 24px' }}>
-                            {formMode === 'add' ? 'Save Order' : 'Update Order'}
-                        </button>
+                        </div>
+                        <div className="modal-footer" style={{ borderTop: '1px solid #e2e8f0', padding: '16px 24px', display: 'flex', justifyContent: 'flex-end', gap: '12px', background: '#f8fafc' }}>
+                            <button type="button" className="btn-secondary" onClick={resetForm} style={{ marginRight: 'auto' }}>Cancel</button>
+                            <button type="submit" form="shipment-form" className="btn-primary" style={{ padding: '8px 24px' }}>
+                                {formMode === 'edit' ? 'Update Order' : 'Add Order'}
+                            </button>
+                        </div>
                     </div>
                 </div>
             )}

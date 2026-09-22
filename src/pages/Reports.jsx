@@ -432,7 +432,9 @@ export default function Reports({ currentUser, initialReportId, isActive }) {
 
                     let backorderSum = 0;
                     backorders.forEach(b => {
-                        backorderSum += Number(b.backorder_amount) || 0;
+                        const amount = Number(b.backorder_amount) || 0;
+                        const avail = Number(b.available) || 0;
+                        backorderSum += (amount + avail);
                     });
                     sz.cells[c].order = backorderSum;
 
@@ -485,7 +487,8 @@ export default function Reports({ currentUser, initialReportId, isActive }) {
             grouped[key].push(item);
         });
 
-        const newData = JSON.parse(JSON.stringify(reportObj.data));
+        const baseDataStr = reportObj.template ? reportObj.template : JSON.stringify(reportObj.data);
+        const newData = JSON.parse(baseDataStr);
 
         if (newData.finishes) {
             newData.finishes.forEach(finish => {
@@ -498,6 +501,7 @@ export default function Reports({ currentUser, initialReportId, isActive }) {
 
                         const items = grouped[`${finish.name.toLowerCase()}|${sz.name.toLowerCase()}|${c.toLowerCase()}`] || [];
                         const normals = items.filter(i => i.backorder !== 1);
+                        const backorders = items.filter(i => i.backorder === 1);
 
                         normals.sort((a, b) => {
                             const dA = a.days || '';
@@ -506,6 +510,14 @@ export default function Reports({ currentUser, initialReportId, isActive }) {
                         });
 
                         sz.cells[c].skus = normals.slice(0, 4).map(i => i.sku);
+
+                        let backorderSum = 0;
+                        backorders.forEach(b => {
+                            const amount = Number(b.backorder_amount) || 0;
+                            const avail = Number(b.available) || 0;
+                            backorderSum += (amount + avail);
+                        });
+                        sz.cells[c].order = backorderSum;
                     });
                 });
             });
@@ -520,16 +532,21 @@ export default function Reports({ currentUser, initialReportId, isActive }) {
         setSavingReport(true);
         try {
             const db = await getDb();
-            const allReports = await db.select('SELECT id, name, data FROM reports');
+            const allReports = await db.select('SELECT id, name, data, template FROM reports');
 
             for (const r of allReports) {
                 const parsedReport = { ...r, data: JSON.parse(r.data) };
-                const newData = updateReportData(parsedReport, inventoryList);
+                let newData;
+                if (r.template) {
+                    newData = updateReportData(parsedReport, inventoryList);
+                } else {
+                    newData = generateReportData(parsedReport, inventoryList);
+                }
                 const jsonStr = JSON.stringify(newData);
                 await db.execute('UPDATE reports SET data = $1 WHERE id = $2', [jsonStr, r.id]);
 
                 if (activeReport && activeReport.id === r.id) {
-                    setActiveReport({ ...activeReport, data: newData });
+                    setActiveReport(prev => ({ ...prev, data: newData }));
                     setActiveFinishIdx(0);
                 }
             }
@@ -1006,18 +1023,32 @@ export default function Reports({ currentUser, initialReportId, isActive }) {
                                     </button>
                                     {canWrite && (
                                         <div style={{ display: 'flex', gap: '8px' }}>
-                                            <button className="btn-upload" onClick={autoUpdate} style={{ background: 'var(--bg-color)', color: 'var(--text-color)', border: '1px solid #cbd5e1' }}>
-                                                <RefreshCw size={16} /> Update
-                                            </button>
+                                            {activeReport.template && (
+                                                <button className="btn-upload" onClick={autoUpdate} style={{ background: 'var(--bg-color)', color: 'var(--text-color)', border: '1px solid #cbd5e1' }}>
+                                                    <RefreshCw size={16} /> Update
+                                                </button>
+                                            )}
                                             <button className="btn-upload" onClick={autoGenerate} style={{ background: 'var(--bg-color)', color: 'var(--text-color)', border: '1px solid #cbd5e1' }}>
                                                 <Sparkles size={16} /> Generate
                                             </button>
                                         </div>
                                     )}
                                     {canWrite && (
-                                        <button className="btn-upload" onClick={saveReportData} disabled={savingReport}>
-                                            <Save size={16} /> {savingReport ? 'Saving...' : 'Save'}
-                                        </button>
+                                        <>
+                                            <button className="btn-upload" onClick={async () => {
+                                                if (!window.confirm("Save the current report structure as a template?")) return;
+                                                const db = await getDb();
+                                                const jsonStr = JSON.stringify(activeReport.data);
+                                                await db.execute('UPDATE reports SET template = $1 WHERE id = $2', [jsonStr, activeReport.id]);
+                                                setActiveReport({ ...activeReport, template: jsonStr });
+                                                alert("Template saved successfully!");
+                                            }} style={{ background: '#10b981', color: 'white', border: 'none' }}>
+                                                <Save size={16} /> Save Template
+                                            </button>
+                                            <button className="btn-upload" onClick={saveReportData} disabled={savingReport}>
+                                                <Save size={16} /> {savingReport ? 'Saving...' : 'Save'}
+                                            </button>
+                                        </>
                                     )}
                                 </div>
                             </div>
@@ -1237,11 +1268,24 @@ export default function Reports({ currentUser, initialReportId, isActive }) {
                             </div>
                         </div>
 
-                        <div className="modal-actions" style={{ display: 'flex', gap: '5px', justifyContent: 'flex-end' }}>
-                            <button className="btn-primary" onClick={() => { setShowAddReport(false); setEditReportId(null); setNewReportName(''); setSelectedProducts([]); setReportSearchTerm(''); setReportIgnore(false); }}>Cancel</button>
-                            <button className="btn-primary" onClick={() => saveReportSettings(newReportName)} disabled={!newReportName || selectedProducts.length === 0}>
-                                {editReportId ? 'Save Changes' : 'Create Report'}
-                            </button>
+                        <div className="modal-actions" style={{ display: 'flex', gap: '5px', justifyContent: 'space-between' }}>
+                            {editReportId && activeReport?.template ? (
+                                <button className="btn-primary" style={{ background: '#ef4444', color: 'white', border: 'none' }} onClick={async () => {
+                                    if (!window.confirm("Delete the template for this report?")) return;
+                                    const db = await getDb();
+                                    await db.execute('UPDATE reports SET template = NULL WHERE id = $1', [editReportId]);
+                                    if (activeReport && activeReport.id === editReportId) {
+                                        setActiveReport({ ...activeReport, template: null });
+                                    }
+                                    alert("Template deleted!");
+                                }}>Delete Template</button>
+                            ) : <div />}
+                            <div style={{ display: 'flex', gap: '5px' }}>
+                                <button className="btn-primary" onClick={() => { setShowAddReport(false); setEditReportId(null); setNewReportName(''); setSelectedProducts([]); setReportSearchTerm(''); setReportIgnore(false); }}>Cancel</button>
+                                <button className="btn-primary" onClick={() => saveReportSettings(newReportName)} disabled={!newReportName || selectedProducts.length === 0}>
+                                    {editReportId ? 'Save Changes' : 'Create Report'}
+                                </button>
+                            </div>
                         </div>
                     </div>
                 </div>

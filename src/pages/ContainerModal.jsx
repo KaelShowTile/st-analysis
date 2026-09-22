@@ -12,7 +12,7 @@ export default function ContainerModal({ record, year, onClose, onSave }) {
         ocean_shipper: '',
         last_free_dtn: '',
         freight_cost: '',
-        contents: [] // Array of { shipment_id, hbl_no, deposit_amount, balance_amount, balance_currency, products: [{product_id, sales_description}] }
+        contents: [] // Array of { shipment_id, hbl_no, deposit_amount, balance_amount, balance_currency, additional_cost, products: [] }
     });
 
     const [openShipments, setOpenShipments] = useState([]);
@@ -50,9 +50,10 @@ export default function ContainerModal({ record, year, onClose, onSave }) {
             const db = await getDb();
             // Load shipments
             const shpOrders = await db.select(`
-                SELECT s.shipment_id, s.invoice_no, s.note, s.products, s.hbl_no, p.shipper_name, s.status 
+                SELECT s.shipment_id, s.invoice_no, s.note, s.products, s.hbl_no, p.shipper_name, p.deposit, s.status 
                 FROM shipments s 
                 LEFT JOIN shippers p ON s.shipper = p.shipper_id 
+                WHERE s.status IN ('open', 'Processing')
                 ORDER BY p.shipper_name ASC, s.invoice_no ASC
             `);
             setOpenShipments(shpOrders);
@@ -76,7 +77,7 @@ export default function ContainerModal({ record, year, onClose, onSave }) {
     const addShipmentBlock = () => {
         setFormData(prev => ({
             ...prev,
-            contents: [...prev.contents, { shipment_id: '', hbl_no: '', deposit_amount: '', balance_amount: '', balance_currency: '', products: [] }]
+            contents: [...prev.contents, { shipment_id: '', hbl_no: '', deposit_amount: '', balance_amount: '', balance_currency: '', additional_cost: '', products: [] }]
         }));
     };
 
@@ -97,6 +98,23 @@ export default function ContainerModal({ record, year, onClose, onSave }) {
                 const selectedShp = openShipments.find(s => s.shipment_id.toString() === value.toString());
                 if (selectedShp && selectedShp.hbl_no) {
                     newContents[index].hbl_no = selectedShp.hbl_no;
+                }
+            }
+
+            // Auto-calculate Balance Amount based on Deposit Amount
+            if (field === 'deposit_amount') {
+                const depositValue = parseFloat(value);
+                const currentShipmentId = newContents[index].shipment_id;
+                if (!isNaN(depositValue) && currentShipmentId) {
+                    const selectedShp = openShipments.find(s => s.shipment_id.toString() === currentShipmentId.toString());
+                    if (selectedShp && selectedShp.deposit) {
+                        const depositRate = parseFloat(selectedShp.deposit) || 0;
+                        if (depositRate > 0 && depositRate <= 100) {
+                            const totalAmount = depositValue / (depositRate / 100);
+                            const balanceValue = totalAmount - depositValue;
+                            newContents[index].balance_amount = balanceValue.toFixed(2);
+                        }
+                    }
                 }
             }
 
@@ -194,10 +212,6 @@ export default function ContainerModal({ record, year, onClose, onSave }) {
                             <input type="text" className="form-control" value={formData.last_free_dtn} onChange={e => handleChange('last_free_dtn', e.target.value)} />
                         </div>
                         <div className="form-group">
-                            <label>INFO</label>
-                            <input type="text" className="form-control" value={formData.info} onChange={e => handleChange('info', e.target.value)} />
-                        </div>
-                        <div className="form-group">
                             <label>Forwarder</label>
                             <select className="form-control" value={formData.ocean_shipper} onChange={e => handleChange('ocean_shipper', e.target.value)}>
                                 <option value="">None</option>
@@ -207,7 +221,7 @@ export default function ContainerModal({ record, year, onClose, onSave }) {
                             </select>
                         </div>
                         <div className="form-group">
-                            <label>Freight Cost (USD/EUR)</label>
+                            <label>Freight Cost (USD)</label>
                             <input type="number" className="form-control" value={formData.freight_cost} onChange={e => handleChange('freight_cost', e.target.value)} />
                         </div>
                         <div className="form-group" style={{ gridColumn: '1 / -1' }}>
@@ -290,7 +304,7 @@ export default function ContainerModal({ record, year, onClose, onSave }) {
                                         </div>
                                     </div>
 
-                                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '16px', marginBottom: '16px', paddingRight: '24px' }}>
+                                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: '16px', marginBottom: '16px', paddingRight: '24px' }}>
                                         <div className="form-group" style={{ margin: 0 }}>
                                             <label style={{ fontSize: '0.85rem' }}>Deposit Amount</label>
                                             <input
@@ -312,13 +326,23 @@ export default function ContainerModal({ record, year, onClose, onSave }) {
                                             />
                                         </div>
                                         <div className="form-group" style={{ margin: 0 }}>
-                                            <label style={{ fontSize: '0.85rem' }}>Balance Currency Rate</label>
+                                            <label style={{ fontSize: '0.85rem' }}>Balance EX Rate</label>
                                             <input
                                                 type="number"
                                                 className="form-control"
                                                 value={block.balance_currency || ''}
                                                 onChange={e => handleContentChange(idx, 'balance_currency', e.target.value)}
                                                 placeholder="AUD/USD Rate"
+                                            />
+                                        </div>
+                                        <div className="form-group" style={{ margin: 0 }}>
+                                            <label style={{ fontSize: '0.85rem' }}>Additional Cost</label>
+                                            <input
+                                                type="number"
+                                                className="form-control"
+                                                value={block.additional_cost || ''}
+                                                onChange={e => handleContentChange(idx, 'additional_cost', e.target.value)}
+                                                placeholder="USD"
                                             />
                                         </div>
                                     </div>

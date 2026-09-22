@@ -99,13 +99,14 @@ export default function ShipperList({ currentUser, isActive }) {
                                     <th style={{ width: '200px', minWidth: '200px' }}>Payment Term</th>
                                     <th style={{ width: '150px', minWidth: '150px' }}>Payment Period (Days)</th>
                                     <th style={{ width: '120px', minWidth: '120px' }}>Deposit (%)</th>
+                                    <th style={{ width: '120px', minWidth: '120px' }}>Duty (%)</th>
                                     {canWrite && <th style={{ width: '40px', minWidth: '40px' }}></th>}
                                 </tr>
                             </thead>
                             <tbody>
                                 {records.length === 0 ? (
                                     <tr>
-                                        <td colSpan={canWrite ? 8 : 7} style={{ textAlign: 'center', padding: '32px', color: '#94a3b8' }}>
+                                        <td colSpan={canWrite ? 9 : 8} style={{ textAlign: 'center', padding: '32px', color: '#94a3b8' }}>
                                             No shippers found.
                                         </td>
                                     </tr>
@@ -200,6 +201,21 @@ export default function ShipperList({ currentUser, isActive }) {
                                                     onBlur={(e) => {
                                                         if (e.target.dataset.initial !== String(row.deposit ?? '')) {
                                                             handleCellBlur(row, 'deposit', row.deposit);
+                                                        }
+                                                    }}
+                                                    disabled={!canWrite}
+                                                />
+                                            </td>
+                                            <td style={{ width: '120px', minWidth: '120px' }}>
+                                                <input
+                                                    type="number"
+                                                    className="excel-input"
+                                                    value={row.duty ?? ''}
+                                                    onChange={(e) => handleCellChange(row.shipper_id, 'duty', e.target.value === '' ? null : Number(e.target.value))}
+                                                    onFocus={(e) => { e.target.dataset.initial = e.target.value; }}
+                                                    onBlur={(e) => {
+                                                        if (e.target.dataset.initial !== String(row.duty ?? '')) {
+                                                            handleCellBlur(row, 'duty', row.duty);
                                                         }
                                                     }}
                                                     disabled={!canWrite}

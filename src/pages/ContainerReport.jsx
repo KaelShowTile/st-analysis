@@ -16,6 +16,23 @@ export default function ContainerReport({ currentUser, onNavigateToShipment, isA
         pendingDocs: []
     });
     const [loadError, setLoadError] = useState(null);
+
+    const getShippers = (cntr) => {
+        if (!cntr.contents) return '';
+        try {
+            const contents = JSON.parse(cntr.contents);
+            const shippers = new Set();
+            contents.forEach(item => {
+                if (item.shipment_id && shipmentsMap[item.shipment_id]) {
+                    const sId = shipmentsMap[item.shipment_id].shipper;
+                    if (sId && shippersMap[sId]) {
+                        shippers.add(shippersMap[sId].shipper_name);
+                    }
+                }
+            });
+            return Array.from(shippers).join(', ');
+        } catch(e) { return ''; }
+    };
     const [loading, setLoading] = useState(true);
 
     // Mappings for Detail Modal
@@ -239,8 +256,11 @@ export default function ContainerReport({ currentUser, onNavigateToShipment, isA
 
         containers.forEach(c => {
             // 2. Delayed (ETA and Original ETA not equal, AND no delivery date)
-            if (c.eta && c.original_eta && c.eta !== c.original_eta) {
-                delayed.push(c);
+            if (c.eta && c.original_eta && c.eta > c.original_eta) {
+                // If there's no delivery date, it hasn't arrived.
+                if (!c.delivery) {
+                    delayed.push(c);
+                }
             }
 
             // 3. In Transit
@@ -316,9 +336,22 @@ export default function ContainerReport({ currentUser, onNavigateToShipment, isA
         });
 
         // Sort lists (newest first based on ID for simplicity, or delivery/eta if wanted. ID is fine)
-        delayed.sort((a, b) => b.container_id - a.container_id);
-        inTransit.sort((a, b) => b.container_id - a.container_id);
-        unpaid.sort((a, b) => b.container_id - a.container_id);
+        // Sort delayed by Original ETA (oldest to newest)
+        delayed.sort((a, b) => {
+            const dateA = a.original_eta ? new Date(a.original_eta) : new Date(0);
+            const dateB = b.original_eta ? new Date(b.original_eta) : new Date(0);
+            return dateA - dateB;
+        });
+        inTransit.sort((a, b) => (a.delivery || '').localeCompare(b.delivery || ''));
+        
+        // Unpaid: Sort by ETA (earliest to latest)
+        unpaid.sort((a, b) => {
+            const dateA = a.eta || a.etd || '';
+            const dateB = b.eta || b.etd || '';
+            if (dateA < dateB) return -1;
+            if (dateA > dateB) return 1;
+            return 0;
+        });
 
         setLists({
             pendingDocs,
@@ -393,12 +426,15 @@ export default function ContainerReport({ currentUser, onNavigateToShipment, isA
                 )}
 
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: '24px' }}>
-                    {renderList('Docs Not Ready', ['Container No', 'ETA'], lists.pendingDocs, (item) => (
+                    {renderList('Docs Not Ready', ['Container No', 'Shipper(s)', 'ETA'], lists.pendingDocs, (item) => (
                         <>
-                            <td style={{ width: '50%', padding: '8px' }}>
+                            <td style={{ width: '35%', padding: '8px' }}>
                                 <div style={{ fontSize: '0.85rem', fontWeight: 500, color: '#1e293b' }}>{item.cntr_no || 'Unknown'}</div>
                             </td>
-                            <td style={{ width: '50%', padding: '8px' }}>
+                            <td style={{ width: '35%', padding: '8px' }}>
+                                <div style={{ fontSize: '0.85rem', color: '#64748b' }}>{getShippers(item) || 'Unknown'}</div>
+                            </td>
+                            <td style={{ width: '30%', padding: '8px' }}>
                                 <div style={{ fontSize: '0.85rem', color: '#ef4444', fontWeight: 500 }}>{item.etd || 'Unknown'}</div>
                             </td>
                         </>
@@ -424,7 +460,7 @@ export default function ContainerReport({ currentUser, onNavigateToShipment, isA
                                 <div style={{ fontSize: '0.85rem', fontWeight: 500, color: '#1e293b' }}>{item.cntr_no || 'Unknown'}</div>
                             </td>
                             <td style={{ width: '50%', padding: '8px' }}>
-                                <div style={{ fontSize: '0.85rem', color: '#3b82f6', fontWeight: 500 }}>{item.delivery}</div>
+                                <div style={{ fontSize: '0.85rem', color: '#3b82f6', fontWeight: 500 }}>{item.delivery ? item.delivery.replace('T', ' ') : ''}</div>
                             </td>
                         </>
                     ))}

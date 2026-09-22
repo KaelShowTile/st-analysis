@@ -1,5 +1,5 @@
 import { getLocalTodayStrSync, getLocalStrFromDate } from '../utils/timezone';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { getDb, getSetting } from '../db/Database';
 import { Plus, Download, Calendar, Edit, FileText, CheckCircle, Navigation, XCircle, Search, Printer, ChevronDown, ChevronUp, Columns, Star } from 'lucide-react';
 import { save, confirm } from '@tauri-apps/plugin-dialog';
@@ -33,6 +33,47 @@ const MultiSelectDropdown = ({ label, options, selected, onChange }) => {
                     ))}
                 </div>
             </details>
+        </div>
+    );
+};
+
+const DeliveryInput = ({ initialValue, onSave }) => {
+    const inputRef = useRef(null);
+    const [isDirty, setIsDirty] = useState(false);
+
+    // Sync state if external initialValue changes (and we're not actively editing)
+    useEffect(() => {
+        if (!isDirty && inputRef.current) {
+            inputRef.current.value = initialValue || '';
+        }
+    }, [initialValue, isDirty]);
+
+    const handleSave = () => {
+        setIsDirty(false);
+        if (inputRef.current) {
+            onSave(inputRef.current.value);
+        }
+    };
+
+    return (
+        <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+            <input
+                ref={inputRef}
+                type="datetime-local"
+                className="excel-input"
+                style={{ flex: 1, minWidth: '0' }}
+                defaultValue={initialValue || ''}
+                onChange={() => setIsDirty(true)}
+            />
+            {isDirty && (
+                <button
+                    onClick={handleSave}
+                    style={{ background: '#10b981', color: 'white', border: 'none', borderRadius: '4px', padding: '4px 8px', cursor: 'pointer', fontSize: '0.75rem', fontWeight: 600, flexShrink: 0 }}
+                    title="Save Delivery Date"
+                >
+                    Save
+                </button>
+            )}
         </div>
     );
 };
@@ -568,7 +609,7 @@ export default function ContainerList({ currentUser, onNavigateToShipment, isAct
         };
 
         let htmlRows = '';
-        filteredRecords.forEach(r => {
+        sortedRecords.forEach(r => {
             const rData = getRowParsedData(r);
             htmlRows += `<tr>`;
             for (const col of printCols) {
@@ -771,6 +812,7 @@ export default function ContainerList({ currentUser, onNavigateToShipment, isAct
         if (searchContent) {
             const lowerSearch = searchContent.toLowerCase();
             const contentMatch = (row.info || '').toLowerCase().includes(lowerSearch) ||
+                (row.memo || '').toLowerCase().includes(lowerSearch) ||
                 (row.cntr_no || '').toLowerCase().includes(lowerSearch) ||
                 rData.productsList.join(' ').toLowerCase().includes(lowerSearch) ||
                 rData.invoices.join(' ').toLowerCase().includes(lowerSearch) ||
@@ -927,6 +969,11 @@ export default function ContainerList({ currentUser, onNavigateToShipment, isAct
 
     const formatDate = (dateStr) => {
         if (!dateStr) return '';
+        if (dateStr.includes('T')) {
+            const [d, t] = dateStr.split('T');
+            const parts = d.split('-');
+            if (parts.length === 3) return `${parts[2]}/${parts[1]}/${parts[0]} ${t}`;
+        }
         const parts = dateStr.split('-');
         if (parts.length === 3) {
             return `${parts[2]}/${parts[1]}/${parts[0]}`;
@@ -1292,11 +1339,9 @@ export default function ContainerList({ currentUser, onNavigateToShipment, isAct
                                                     {visibleColumns.includes('delivery') && <td>
                                                         <div className="readonly-cell">
                                                             {canWrite ? (
-                                                                <input
-                                                                    type="date"
-                                                                    className="excel-input"
-                                                                    value={row.delivery || ''}
-                                                                    onChange={e => handleDeliveryChange(row.container_id, e.target.value)}
+                                                                <DeliveryInput 
+                                                                    initialValue={row.delivery} 
+                                                                    onSave={(val) => handleDeliveryChange(row.container_id, val)} 
                                                                 />
                                                             ) : (
                                                                 formatDate(row.delivery)

@@ -320,3 +320,12 @@
 .reports-layout .search-input {
     padding-left: 10px;
 }
+
+.cost-report-layout .reports-sidebar .delete-btn {
+    background: transparent;
+    border-width: 0;
+}
+
+.cost-report-layout .reports-sidebar .delete-btn svg {
+    stroke: #ccc;
+}

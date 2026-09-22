@@ -39,7 +39,7 @@ export default function ComingProducts({ isActive }) {
     const loadOrders = async () => {
         try {
             const db = await getDb();
-            const res = await db.select("SELECT * FROM shipments WHERE status IN ('open', 'processing')");
+            const res = await db.select("SELECT * FROM shipments WHERE status IN ('open', 'Processing')");
             setOrders(res);
         } catch (e) {
             console.error("Failed to load orders", e);

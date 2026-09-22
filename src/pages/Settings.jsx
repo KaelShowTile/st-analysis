@@ -15,10 +15,15 @@ export default function Settings({ currentUser }) {
     const [backups, setBackups] = useState([]);
     const [isRestoring, setIsRestoring] = useState(false);
     const [currentDbPath, setCurrentDbPath] = useState('');
+    const [dbType, setDbType] = useState('sqlite');
+    const [tursoUrl, setTursoUrl] = useState('');
+    const [tursoToken, setTursoToken] = useState('');
     const [maxContainerTracking, setMaxContainerTracking] = useState(50);
     const [timezone, setTimezone] = useState(Intl.DateTimeFormat().resolvedOptions().timeZone);
     const [findTeuApi, setFindTeuApi] = useState('https://findteu.showtile-apis.workers.dev/api');
     const [findTeuApiKey, setFindTeuApiKey] = useState('TAURI_API_KEY');
+    const [storageFee, setStorageFee] = useState('');
+    const [defaultUsdAudRate, setDefaultUsdAudRate] = useState('1');
     const [printColsContainer, setPrintColsContainer] = useState(['cntr_no', 'hbl_no', 'shipper', 'invoice_no', 'payment', 'doc', 'contents', 'tracking', 'pol', 'etd', 'eta', 'original_eta', 'delivery', 'info', 'last_free_dtn']);
     const [printColsShipment, setPrintColsShipment] = useState(['invoice_no', 'hbl_no', 'shipper_name', 'est_date', 'cntr_no', 'products', 'note', 'deposit', 'balance']);
 
@@ -39,12 +44,20 @@ export default function Settings({ currentUser }) {
             shippers: { read: false, write: false },
             oceanShippers: { read: false, write: false },
             comingProducts: { read: false, write: false },
-            comingContainer: { read: false, write: false }
+            comingContainer: { read: false, write: false },
+            costReport: { read: false, write: false }
         }
     });
 
     const loadDbPath = async () => {
         const store = await load('settings.json', { autoSave: false });
+
+        const type = await store.get('db_type');
+        setDbType(type || 'sqlite');
+        const url = await store.get('turso_url');
+        setTursoUrl(url || '');
+        const token = await store.get('turso_token');
+        setTursoToken(token || '');
 
         const path = await getDbPath();
         if (path) {
@@ -57,6 +70,21 @@ export default function Settings({ currentUser }) {
         const maxTracking = await store.get('max_container_tracking');
         if (maxTracking !== undefined) {
             setMaxContainerTracking(parseInt(maxTracking, 10));
+        }
+    };
+
+    const handleSaveDatabaseBackend = async () => {
+        try {
+            const store = await load('settings.json', { autoSave: false });
+            await store.set('db_type', dbType);
+            await store.set('turso_url', tursoUrl);
+            await store.set('turso_token', tursoToken);
+            await store.save();
+            alert("Database backend configuration saved. The application will now restart to apply changes.");
+            window.location.reload();
+        } catch (e) {
+            console.error("Failed to save database backend:", e);
+            alert("Failed to save configuration.");
         }
     };
 
@@ -74,6 +102,11 @@ export default function Settings({ currentUser }) {
     const handleSaveTimezone = async () => {
         await setSetting('timezone', timezone);
         alert("Timezone settings saved successfully.");
+    };
+
+    const handleSaveStorageFee = async () => {
+        await setSetting('storage_fee', storageFee);
+        alert("Storage Fee saved successfully.");
     };
 
     const handleSaveFindTeuSettings = async () => {
@@ -222,9 +255,13 @@ export default function Settings({ currentUser }) {
         const url = await getSetting('findteu_api_url', 'https://findteu.showtile-apis.workers.dev/api');
         const key = await getSetting('findteu_api_key', 'TAURI_API_KEY');
         const tz = await getSetting('timezone', Intl.DateTimeFormat().resolvedOptions().timeZone);
+        const sf = await getSetting('storage_fee', '');
+        const rate = await getSetting('default_usd_aud_rate', '1');
         setFindTeuApi(url);
         setFindTeuApiKey(key);
         setTimezone(tz);
+        setStorageFee(sf);
+        setDefaultUsdAudRate(rate);
 
         const pcStr = await getSetting('print_cols_container', '');
         if (pcStr) {
@@ -440,6 +477,57 @@ export default function Settings({ currentUser }) {
             <div className="settings-card" style={{ marginTop: '24px' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '16px' }}>
                     <div>
+                        <h3 style={{ margin: '0 0 4px 0' }}>Database Backend</h3>
+                        <p className="subtitle" style={{ margin: 0 }}>Choose between Local SQLite and Turso Cloud Database.</p>
+                    </div>
+                </div>
+                
+                <div style={{ marginBottom: '16px' }}>
+                    <label style={{ marginRight: '16px', display: 'inline-flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
+                        <input type="radio" name="dbType" value="sqlite" checked={dbType === 'sqlite'} onChange={() => setDbType('sqlite')} />
+                        Local SQLite
+                    </label>
+                    <label style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
+                        <input type="radio" name="dbType" value="turso" checked={dbType === 'turso'} onChange={() => setDbType('turso')} />
+                        Turso Cloud Database
+                    </label>
+                </div>
+
+                {dbType === 'turso' && (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', marginBottom: '16px', background: 'var(--surface-color)', padding: '16px', borderRadius: '6px', border: '1px solid var(--border-color)' }}>
+                        <div>
+                            <label className="form-label" style={{ fontWeight: 'bold' }}>Turso Database URL</label>
+                            <input
+                                type="text"
+                                className="form-input"
+                                value={tursoUrl}
+                                onChange={e => setTursoUrl(e.target.value)}
+                                placeholder="libsql://your-db-url.turso.io"
+                            />
+                        </div>
+                        <div>
+                            <label className="form-label" style={{ fontWeight: 'bold' }}>Auth Token</label>
+                            <input
+                                type="password"
+                                className="form-input"
+                                value={tursoToken}
+                                onChange={e => setTursoToken(e.target.value)}
+                                placeholder="ey..."
+                            />
+                        </div>
+                    </div>
+                )}
+
+                <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+                    <button onClick={handleSaveDatabaseBackend} className="btn-primary">
+                        Save & Restart
+                    </button>
+                </div>
+            </div>
+
+            <div className="settings-card" style={{ marginTop: '24px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '16px' }}>
+                    <div>
                         <h3 style={{ margin: '0 0 4px 0' }}>Database Management</h3>
                         <p className="subtitle" style={{ margin: 0 }}>The system automatically backs up your database on startup (max 10 versions).</p>
                     </div>
@@ -533,6 +621,51 @@ export default function Settings({ currentUser }) {
                             ))}
                         </select>
                         <button onClick={handleSaveTimezone} className="btn-primary" style={{ flexShrink: 0 }}>
+                            Save
+                        </button>
+                    </div>
+                </div>
+
+                <div className="attribute-item" style={{ display: 'flex', justifyContent: 'space-between', padding: '12px 16px', background: 'var(--surface-color)', borderRadius: '6px', border: '1px solid var(--border-color)', alignItems: 'center', marginTop: '12px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flex: 1, overflow: 'hidden' }}>
+                        <div style={{ fontWeight: 500 }}>Storage Fee (per sqm)</div>
+                    </div>
+                    <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                        <input
+                            type="number"
+                            className="form-input"
+                            style={{ width: '80px', margin: 0 }}
+                            value={storageFee}
+                            onChange={(e) => setStorageFee(e.target.value)}
+                            placeholder="e.g. 5.50"
+                        />
+                        <button onClick={async () => {
+                            await setSetting('storage_fee', storageFee);
+                            alert("Storage Fee saved successfully.");
+                        }} className="btn-primary" style={{ flexShrink: 0 }}>
+                            Save
+                        </button>
+                    </div>
+                </div>
+
+                <div className="attribute-item" style={{ display: 'flex', justifyContent: 'space-between', padding: '12px 16px', background: 'var(--surface-color)', borderRadius: '6px', border: '1px solid var(--border-color)', alignItems: 'center', marginTop: '12px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flex: 1, overflow: 'hidden' }}>
+                        <div style={{ fontWeight: 500 }}>Default AUD/USD Exchange Rate</div>
+                    </div>
+                    <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                        <input
+                            type="number"
+                            step="0.0001"
+                            className="form-input"
+                            style={{ width: '100px', margin: 0 }}
+                            value={defaultUsdAudRate}
+                            onChange={(e) => setDefaultUsdAudRate(e.target.value)}
+                            placeholder="e.g. 1.5200"
+                        />
+                        <button onClick={async () => {
+                            await setSetting('default_usd_aud_rate', defaultUsdAudRate);
+                            alert("Exchange Rate saved successfully.");
+                        }} className="btn-primary" style={{ flexShrink: 0 }}>
                             Save
                         </button>
                     </div>
@@ -641,6 +774,7 @@ export default function Settings({ currentUser }) {
                                     oceanShippers: { read: false, write: false },
                                     comingProducts: { read: false, write: false },
                                     comingContainer: { read: false, write: false },
+                                    costReport: { read: false, write: false },
                                     admin: false
                                 }
                             });
@@ -680,6 +814,7 @@ export default function Settings({ currentUser }) {
                                                 oceanShippers: { read: false, write: false },
                                                 comingProducts: { read: false, write: false },
                                                 comingContainer: { read: false, write: false },
+                                                costReport: { read: false, write: false },
                                                 admin: false,
                                                 ...u.permissions
                                             }

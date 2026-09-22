@@ -80,6 +80,7 @@ export default function ComingContainers({ isActive }) {
             const lowerSearch = searchContent.toLowerCase();
             result = result.filter(c => {
                 if (c.cntr_no && c.cntr_no.toLowerCase().includes(lowerSearch)) return true;
+                if (c.memo && c.memo.toLowerCase().includes(lowerSearch)) return true;
                 const rData = getRowParsedData(c);
                 return rData.productsList.some(p => p.toLowerCase().includes(lowerSearch));
             });
@@ -113,6 +114,20 @@ export default function ComingContainers({ isActive }) {
         return 0;
     });
 
+    const formatDate = (dateStr) => {
+        if (!dateStr) return '';
+        if (dateStr.includes('T')) {
+            const [d, t] = dateStr.split('T');
+            const parts = d.split('-');
+            if (parts.length === 3) return `${parts[2]}/${parts[1]}/${parts[0]} ${t}`;
+        }
+        const parts = dateStr.split('-');
+        if (parts.length === 3) {
+            return `${parts[2]}/${parts[1]}/${parts[0]}`;
+        }
+        return dateStr;
+    };
+
     const getEtaStyle = (etaStr, origEtaStr) => {
         if (!etaStr || !origEtaStr) return {};
         if (etaStr !== origEtaStr) {
@@ -122,14 +137,14 @@ export default function ComingContainers({ isActive }) {
     };
 
     const exportHTML = async (print = false) => {
-        const printCols = ['cntr_no', 'contents', 'etd', 'eta', 'delivery', 'original_eta', 'memo'];
+        const printCols = ['cntr_no', 'contents', 'etd', 'eta', 'original_eta', 'delivery', 'memo'];
         const colLabels = {
             cntr_no: 'Container No.',
             contents: 'Contents',
             etd: 'ETD',
             eta: 'ETA',
-            delivery: 'Delivery',
             original_eta: 'Original ETA',
+            delivery: 'Delivery',
             memo: 'Memo'
         };
 
@@ -139,8 +154,10 @@ export default function ComingContainers({ isActive }) {
             for (const col of printCols) {
                 if (col === 'contents') {
                     htmlRows += `<td>${getRowParsedData(c).productsList.join('<br/>')}</td>`;
-                } else if (col === 'eta') {
-                    htmlRows += `<td style="${c.eta !== c.original_eta ? 'color: #ef4444; font-weight: bold;' : ''}">${c.eta || ''}</td>`;
+                } else if (col === 'eta' || col === 'original_eta') {
+                    htmlRows += `<td ${col === 'eta' && c.eta !== c.original_eta ? 'style="color: #ef4444; font-weight: bold;"' : ''}>${formatDate(c[col]) || ''}</td>`;
+                } else if (col === 'delivery') {
+                    htmlRows += `<td>${formatDate(c[col]) || ''}</td>`;
                 } else {
                     htmlRows += `<td>${c[col] || ''}</td>`;
                 }
@@ -151,36 +168,36 @@ export default function ComingContainers({ isActive }) {
         const headerRow = printCols.map(col => `<th>${colLabels[col]}</th>`).join('');
 
         const html = `<!DOCTYPE html>
-<html>
-<head>
-<meta charset="utf-8">
-<title>Coming Containers</title>
-<style>
-    body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; padding: 20px; color: #1e293b; background: white; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-    h2 { margin-top: 0; color: #0f172a; margin-bottom: 20px; }
-    .report-table { width: 100%; border-collapse: collapse; font-size: 11px; }
-    .report-table th, .report-table td { border: 1px solid #cbd5e1; padding: 8px; text-align: left; vertical-align: top; }
-    .report-table th { background: #f8fafc; font-weight: bold; color: #475569; }
-    @media print {
-        body { padding: 0; margin: 0; }
-        @page { margin: 10mm; }
-    }
-</style>
-</head>
-<body>
-    <h2>Coming Containers (Records: ${sortedContainers.length})</h2>
-    <table class="report-table">
-        <thead>
-            <tr>
-                ${headerRow}
-            </tr>
-        </thead>
-        <tbody>
-            ${htmlRows}
-        </tbody>
-    </table>
-</body>
-</html>`;
+        <html>
+        <head>
+        <meta charset="utf-8">
+        <title>Coming Containers</title>
+        <style>
+            body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; padding: 20px; color: #1e293b; background: white; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+            h2 { margin-top: 0; color: #0f172a; margin-bottom: 20px; }
+            .report-table { width: 100%; border-collapse: collapse; font-size: 11px; }
+            .report-table th, .report-table td { border: 1px solid #cbd5e1; padding: 8px; text-align: left; vertical-align: top; }
+            .report-table th { background: #f8fafc; font-weight: bold; color: #475569; }
+            @media print {
+                body { padding: 0; margin: 0; }
+                @page { margin: 10mm; }
+            }
+        </style>
+        </head>
+        <body>
+            <h2>Coming Containers (Records: ${sortedContainers.length})</h2>
+            <table class="report-table">
+                <thead>
+                    <tr>
+                        ${headerRow}
+                    </tr>
+                </thead>
+                <tbody>
+                    ${htmlRows}
+                </tbody>
+            </table>
+        </body>
+        </html>`;
 
         if (print) {
             const iframe = document.createElement('iframe');
@@ -278,9 +295,9 @@ export default function ComingContainers({ isActive }) {
                                     <th className='has-sort-icon' style={{ width: '130px', minWidth: '130px', cursor: 'pointer' }} onClick={() => handleSort('cntr_no')}><SortIcon columnKey="cntr_no" /> Container No.</th>
                                     <th className='has-sort-icon' style={{ width: '400px', minWidth: '250px', cursor: 'pointer' }} onClick={() => handleSort('contents')}><SortIcon columnKey="contents" /> Contents</th>
                                     <th className='has-sort-icon' style={{ width: '100px', minWidth: '100px', cursor: 'pointer' }} onClick={() => handleSort('etd')}><SortIcon columnKey="etd" /> ETD</th>
+                                    <th className='has-sort-icon' style={{ width: '130px', minWidth: '130px', cursor: 'pointer' }} onClick={() => handleSort('original_eta')}><SortIcon columnKey="original_eta" /> Original ETA</th>
                                     <th className='has-sort-icon' style={{ width: '100px', minWidth: '100px', cursor: 'pointer' }} onClick={() => handleSort('eta')}><SortIcon columnKey="eta" /> ETA</th>
                                     <th className='has-sort-icon' style={{ width: '130px', minWidth: '130px', cursor: 'pointer' }} onClick={() => handleSort('delivery')}><SortIcon columnKey="delivery" /> Delivery</th>
-                                    <th className='has-sort-icon' style={{ width: '130px', minWidth: '130px', cursor: 'pointer' }} onClick={() => handleSort('original_eta')}><SortIcon columnKey="original_eta" /> Original ETA</th>
                                     <th className='has-sort-icon' style={{ width: '200px', minWidth: '200px', cursor: 'pointer' }} onClick={() => handleSort('memo')}><SortIcon columnKey="memo" /> Memo</th>
                                 </tr>
                             </thead>
@@ -293,10 +310,10 @@ export default function ComingContainers({ isActive }) {
                                                 {getRowParsedData(row).productsList.map((p, idx) => <div key={idx}>{p}</div>)}
                                             </div>
                                         </td>
-                                        <td><div className="readonly-cell">{row.etd}</div></td>
-                                        <td><div className="readonly-cell" style={getEtaStyle(row.eta, row.original_eta)}>{row.eta}</div></td>
-                                        <td><div className="readonly-cell">{row.delivery}</div></td>
-                                        <td><div className="readonly-cell">{row.original_eta}</div></td>
+                                        <td><div className="readonly-cell">{formatDate(row.etd)}</div></td>
+                                        <td><div className="readonly-cell">{formatDate(row.original_eta)}</div></td>
+                                        <td><div className="readonly-cell" style={getEtaStyle(row.eta, row.original_eta)}>{formatDate(row.eta)}</div></td>
+                                        <td><div className="readonly-cell">{formatDate(row.delivery)}</div></td>
                                         <td>
                                             <div className="readonly-cell" style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
                                                 {row.memo}

@@ -8,7 +8,9 @@ import ComingProducts from './ComingProducts';
 import ComingContainers from './ComingContainers';
 import './Containers.css';
 
-export default function Containers({ currentUser, isActive }) {
+import { useEffect } from 'react';
+
+export default function Containers({ currentUser, isActive, externalShipmentId, onClearExternalShipment }) {
     const p = currentUser?.permissions || {};
     const [subTab, setSubTab] = useState(() => {
         if (p.containerDashboard?.read) return 'report';
@@ -22,6 +24,14 @@ export default function Containers({ currentUser, isActive }) {
     });
 
     const [editShipmentId, setEditShipmentId] = useState(null);
+
+    useEffect(() => {
+        if (externalShipmentId) {
+            setEditShipmentId(externalShipmentId);
+            setSubTab('shipments');
+            if (onClearExternalShipment) onClearExternalShipment();
+        }
+    }, [externalShipmentId, onClearExternalShipment]);
 
     const handleNavigateToShipment = (id) => {
         setEditShipmentId(id);

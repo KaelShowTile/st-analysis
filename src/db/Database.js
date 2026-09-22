@@ -1,9 +1,12 @@
 import Database from '@tauri-apps/plugin-sql';
+import { createClient } from '@libsql/client';
 import { load } from '@tauri-apps/plugin-store';
 import { appDataDir, join } from '@tauri-apps/api/path';
 import { exists, mkdir } from '@tauri-apps/plugin-fs';
 
 let dbPromise = null;
+const queryCache = new Map();
+const inFlightQueries = new Map();
 
 export const getDbPath = async () => {
     const store = await load('settings.json', { autoSave: false });
@@ -35,32 +38,99 @@ export const getDb = async () => {
     if (!dbPromise) {
         dbPromise = (async () => {
             const store = await load('settings.json', { autoSave: false });
-            const customPath = await store.get('customDbPath');
-
-            let connectionString;
-            if (customPath) {
-                connectionString = `sqlite:${customPath}`;
-            } else {
-                const appDir = await appDataDir();
-                if (!(await exists(appDir))) {
-                    await mkdir(appDir, { recursive: true });
-                }
-                const defaultDbPath = await join(appDir, 'inventory.db');
-                connectionString = `sqlite:${defaultDbPath}`;
-            }
-
-            const db = await Database.load(connectionString);
-            await initializeTables(db);
-            // Ensure new columns exist in containers table
-            try { await db.execute('ALTER TABLE containers ADD COLUMN deposit TEXT'); } catch(e) {}
-            try { await db.execute('ALTER TABLE containers ADD COLUMN balance TEXT'); } catch(e) {}
-            try { await db.execute('ALTER TABLE containers ADD COLUMN payment_date TEXT'); } catch(e) {}
+            const dbType = await store.get('db_type');
             
-            // Ensure new columns exist in reports table
-            try { await db.execute('ALTER TABLE reports ADD COLUMN ignore INTEGER DEFAULT 0'); } catch(e) {}
+            if (dbType === 'turso') {
+                const url = await store.get('turso_url');
+                const authToken = await store.get('turso_token');
+                
+                if (!url || !authToken) {
+                    console.error("Turso database configured but missing URL or Token.");
+                    alert("Database connection failed. Please check Turso configuration in settings.");
+                    throw new Error("Missing Turso configuration");
+                }
+                
+                const client = createClient({ url, authToken });
+                
+                const dbProxy = {
+                    select: async (query, args = []) => {
+                        const safeQuery = query.replace(/\$\d+/g, '?');
+                        const cacheKey = safeQuery + '|' + JSON.stringify(args);
 
-            console.log('Database initialized successfully.');
-            return db;
+                        if (queryCache.has(cacheKey)) {
+                            const cached = queryCache.get(cacheKey);
+                            if (Date.now() - cached.timestamp < 15000) {
+                                return cached.data;
+                            } else {
+                                queryCache.delete(cacheKey);
+                            }
+                        }
+
+                        if (inFlightQueries.has(cacheKey)) {
+                            return await inFlightQueries.get(cacheKey);
+                        }
+
+                        const fetchPromise = (async () => {
+                            const res = await client.execute({ sql: safeQuery, args });
+                            const data = res.rows.map(row => {
+                                const obj = {};
+                                res.columns.forEach(col => { obj[col] = row[col]; });
+                                return obj;
+                            });
+                            queryCache.set(cacheKey, { data, timestamp: Date.now() });
+                            return data;
+                        })();
+
+                        inFlightQueries.set(cacheKey, fetchPromise);
+                        try {
+                            const result = await fetchPromise;
+                            return result;
+                        } finally {
+                            inFlightQueries.delete(cacheKey);
+                        }
+                    },
+                    execute: async (query, args = []) => {
+                        const safeQuery = query.replace(/\$\d+/g, '?');
+                        queryCache.clear();
+                        return await client.execute({ sql: safeQuery, args });
+                    },
+                    close: async () => {}
+                };
+                
+                await initializeTables(dbProxy);
+                
+                try { await dbProxy.execute('ALTER TABLE containers ADD COLUMN deposit TEXT'); } catch(e) {}
+                try { await dbProxy.execute('ALTER TABLE containers ADD COLUMN balance TEXT'); } catch(e) {}
+                try { await dbProxy.execute('ALTER TABLE containers ADD COLUMN payment_date TEXT'); } catch(e) {}
+                try { await dbProxy.execute('ALTER TABLE reports ADD COLUMN ignore INTEGER DEFAULT 0'); } catch(e) {}
+                
+                console.log('Turso Database initialized successfully.');
+                return dbProxy;
+            } else {
+                const customPath = await store.get('customDbPath');
+                let connectionString;
+                if (customPath) {
+                    connectionString = `sqlite:${customPath}`;
+                } else {
+                    const appDir = await appDataDir();
+                    if (!(await exists(appDir))) {
+                        await mkdir(appDir, { recursive: true });
+                    }
+                    const defaultDbPath = await join(appDir, 'inventory.db');
+                    connectionString = `sqlite:${defaultDbPath}`;
+                }
+
+                const db = await Database.load(connectionString);
+                await initializeTables(db);
+                
+                try { await db.execute('ALTER TABLE containers ADD COLUMN deposit TEXT'); } catch(e) {}
+                try { await db.execute('ALTER TABLE containers ADD COLUMN balance TEXT'); } catch(e) {}
+                try { await db.execute('ALTER TABLE containers ADD COLUMN payment_date TEXT'); } catch(e) {}
+                try { await db.execute('ALTER TABLE reports ADD COLUMN ignore INTEGER DEFAULT 0'); } catch(e) {}
+                
+                console.log('SQLite Database initialized successfully.');
+                return db;
+            }
         })();
     }
     return dbPromise;
@@ -115,6 +185,44 @@ const initializeTables = async (db) => {
     `);
 
     await db.execute(`
+        CREATE TABLE IF NOT EXISTS collections (
+            collection_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            collection_name TEXT,
+            shipper_id INTEGER
+        )
+    `);
+
+    await db.execute(`
+        CREATE TABLE IF NOT EXISTS products (
+            product_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            product_name TEXT,
+            product_description TEXT,
+            collection_id INTEGER,
+            shipper_id INTEGER,
+            color TEXT,
+            finish TEXT,
+            size TEXT,
+            showtile_name TEXT,
+            showtile_product_code TEXT,
+            showtile_price REAL,
+            gto_id TEXT,
+            gto_product_code TEXT,
+            gto_name TEXT,
+            gto_regular_price REAL,
+            gto_sales_price REAL,
+            cht_id TEXT,
+            cht_product_code TEXT,
+            cht_name TEXT,
+            cht_regular_price REAL,
+            cht_sales_price REAL,
+            cht_and_gto_stock_status TEXT,
+            m2_per_box REAL,
+            pcs_per_box REAL,
+            box_per_pallet REAL
+        )
+    `);
+
+    await db.execute(`
         CREATE TABLE IF NOT EXISTS attributes (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             type TEXT, -- 'finish', 'colour'
@@ -129,6 +237,16 @@ const initializeTables = async (db) => {
             start_date TEXT,
             end_date TEXT,
             data TEXT
+        )
+    `);
+
+    await db.execute(`
+        CREATE TABLE IF NOT EXISTS cost_reports (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT,
+            shipment_id INTEGER,
+            data TEXT,
+            created_at TEXT
         )
     `);
 
@@ -213,7 +331,8 @@ const initializeTables = async (db) => {
             last_free_dtn TEXT,
             deposit TEXT,
             balance TEXT,
-            payment_date TEXT
+            payment_date TEXT,
+            freight_cost REAL
         )
     `);
 
@@ -263,10 +382,48 @@ const initializeTables = async (db) => {
         await db.execute('ALTER TABLE shipments ADD COLUMN payment_date TEXT');
     } catch (e) {}
 
+    try {
+        await db.execute('ALTER TABLE shipments ADD COLUMN deposit_paid_date TEXT');
+    } catch (e) {}
+
+    try {
+        await db.execute('ALTER TABLE shipments ADD COLUMN deposit_amount REAL');
+    } catch (e) {}
+    
+    try {
+        await db.execute('ALTER TABLE shipments ADD COLUMN deposit_currency REAL');
+    } catch (e) {}
+
+    try {
+        await db.execute('ALTER TABLE ocean_shippers ADD COLUMN extra_charges TEXT');
+    } catch (e) {}
+
+    try {
+        await db.execute('ALTER TABLE ocean_shippers ADD COLUMN duty REAL');
+    } catch (e) {}
+
+    try {
+        await db.execute('ALTER TABLE shippers ADD COLUMN duty REAL');
+    } catch (e) {}
+
+    try {
+        await db.execute('ALTER TABLE shipments ADD COLUMN duty REAL');
+    } catch (e) {}
+
+
     
     // Container mark_record migration
     try {
         await db.execute('ALTER TABLE containers ADD COLUMN mark_record INTEGER DEFAULT 0');
+    } catch (e) {}
+
+    try {
+        await db.execute('ALTER TABLE containers ADD COLUMN freight_cost REAL');
+    } catch (e) {}
+
+    
+    try {
+        await db.execute('ALTER TABLE inventory ADD COLUMN product_parent_id INTEGER');
     } catch (e) {}
 
     // Shipper contact info and Report shipper_id migrations
@@ -277,6 +434,10 @@ const initializeTables = async (db) => {
 
     try {
         await db.execute('ALTER TABLE reports ADD COLUMN shipper_id INTEGER');
+    } catch (e) {}
+
+    try {
+        await db.execute('ALTER TABLE reports ADD COLUMN template TEXT');
     } catch (e) {}
 
     // Drop unused columns from containers
@@ -311,7 +472,9 @@ const initializeTables = async (db) => {
             shipmentOrders: { read: true, write: true },
             containerList: { read: true, write: true },
             shippers: { read: true, write: true },
-            oceanShippers: { read: true, write: true }
+            oceanShippers: { read: true, write: true },
+            costReport: { read: true, write: true },
+            products: { read: true, write: true }
         });
         await db.execute(
             "INSERT INTO users (username, password, permissions) VALUES ($1, $2, $3)",
@@ -342,6 +505,14 @@ const initializeTables = async (db) => {
                     updated = true;
                 }
                 
+                
+                if (!p.products) {
+                    if (p.admin || user.id === 1 || user.username === 'showtile' || user.username === 'admin') {
+                        p.products = { read: true, write: true };
+                        updated = true;
+                    }
+                }
+
                 if (p.admin === undefined && (user.id === 1 || user.username === 'showtile' || user.username === 'admin')) {
                     p.admin = true;
                     updated = true;
