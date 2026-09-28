@@ -26,6 +26,14 @@ export default function Settings({ currentUser }) {
     const [defaultUsdAudRate, setDefaultUsdAudRate] = useState('1');
     const [printColsContainer, setPrintColsContainer] = useState(['cntr_no', 'hbl_no', 'shipper', 'invoice_no', 'payment', 'doc', 'contents', 'tracking', 'pol', 'etd', 'eta', 'original_eta', 'delivery', 'info', 'last_free_dtn']);
     const [printColsShipment, setPrintColsShipment] = useState(['invoice_no', 'hbl_no', 'shipper_name', 'est_date', 'cntr_no', 'products', 'note', 'deposit', 'balance']);
+    
+    const [chtEndpoint, setChtEndpoint] = useState('');
+    const [chtKey, setChtKey] = useState('');
+    const [chtFeed, setChtFeed] = useState('');
+
+    const [gtoEndpoint, setGtoEndpoint] = useState('');
+    const [gtoKey, setGtoKey] = useState('');
+    const [gtoFeed, setGtoFeed] = useState('');
 
     const isAdmin = currentUser?.permissions?.admin === true;
     const [users, setUsers] = useState([]);
@@ -71,6 +79,14 @@ export default function Settings({ currentUser }) {
         if (maxTracking !== undefined) {
             setMaxContainerTracking(parseInt(maxTracking, 10));
         }
+        
+        setChtEndpoint(await store.get('cht_endpoint') || '');
+        setChtKey(await store.get('cht_key') || '');
+        setChtFeed(await store.get('cht_feed') || '');
+
+        setGtoEndpoint(await store.get('gto_endpoint') || '');
+        setGtoKey(await store.get('gto_key') || '');
+        setGtoFeed(await store.get('gto_feed') || '');
     };
 
     const handleSaveDatabaseBackend = async () => {
@@ -119,6 +135,25 @@ export default function Settings({ currentUser }) {
         await setSetting('print_cols_container', JSON.stringify(printColsContainer));
         await setSetting('print_cols_shipment', JSON.stringify(printColsShipment));
         alert("Export & Print settings saved successfully.");
+    };
+
+    const handleSaveWooSettings = async () => {
+        try {
+            const store = await load('settings.json', { autoSave: false });
+            await store.set('cht_endpoint', chtEndpoint);
+            await store.set('cht_key', chtKey);
+            await store.set('cht_feed', chtFeed);
+            
+            await store.set('gto_endpoint', gtoEndpoint);
+            await store.set('gto_key', gtoKey);
+            await store.set('gto_feed', gtoFeed);
+
+            await store.save();
+            alert("WooCommerce API settings saved successfully.");
+        } catch (e) {
+            console.error("Failed to save WooCommerce settings:", e);
+            alert("Failed to save configuration.");
+        }
     };
 
     const handleMoveDatabase = async () => {
@@ -521,6 +556,57 @@ export default function Settings({ currentUser }) {
                 <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
                     <button onClick={handleSaveDatabaseBackend} className="btn-primary">
                         Save & Restart
+                    </button>
+                </div>
+            </div>
+
+            <div className="settings-card" style={{ marginTop: '24px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '16px' }}>
+                    <div>
+                        <h3 style={{ margin: '0 0 4px 0' }}>WooCommerce API Sync</h3>
+                        <p className="subtitle" style={{ margin: 0 }}>Configure API keys and feeds for CHT and GTO websites.</p>
+                    </div>
+                </div>
+
+                <div style={{ display: 'flex', gap: '24px' }}>
+                    {/* CHT Settings */}
+                    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '12px', background: 'var(--surface-color)', padding: '16px', borderRadius: '6px', border: '1px solid var(--border-color)' }}>
+                        <h4 style={{ margin: '0 0 8px 0', borderBottom: '1px solid #e2e8f0', paddingBottom: '8px' }}>CHT Website</h4>
+                        <div>
+                            <label className="form-label" style={{ fontWeight: 'bold' }}>Endpoint URL</label>
+                            <input type="text" className="form-input" value={chtEndpoint} onChange={e => setChtEndpoint(e.target.value)} placeholder="https://cht.example.com/wp-json/wc/v3" />
+                        </div>
+                        <div>
+                            <label className="form-label" style={{ fontWeight: 'bold' }}>API Key</label>
+                            <input type="text" className="form-input" value={chtKey} onChange={e => setChtKey(e.target.value)} placeholder="ck_..." />
+                        </div>
+                        <div>
+                            <label className="form-label" style={{ fontWeight: 'bold' }}>Product Feed URL</label>
+                            <input type="text" className="form-input" value={chtFeed} onChange={e => setChtFeed(e.target.value)} placeholder="https://cht.example.com/feed.json" />
+                        </div>
+                    </div>
+
+                    {/* GTO Settings */}
+                    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '12px', background: 'var(--surface-color)', padding: '16px', borderRadius: '6px', border: '1px solid var(--border-color)' }}>
+                        <h4 style={{ margin: '0 0 8px 0', borderBottom: '1px solid #e2e8f0', paddingBottom: '8px' }}>GTO Website</h4>
+                        <div>
+                            <label className="form-label" style={{ fontWeight: 'bold' }}>Endpoint URL</label>
+                            <input type="text" className="form-input" value={gtoEndpoint} onChange={e => setGtoEndpoint(e.target.value)} placeholder="https://gto.example.com/wp-json/wc/v3" />
+                        </div>
+                        <div>
+                            <label className="form-label" style={{ fontWeight: 'bold' }}>API Key</label>
+                            <input type="text" className="form-input" value={gtoKey} onChange={e => setGtoKey(e.target.value)} placeholder="ck_..." />
+                        </div>
+                        <div>
+                            <label className="form-label" style={{ fontWeight: 'bold' }}>Product Feed URL</label>
+                            <input type="text" className="form-input" value={gtoFeed} onChange={e => setGtoFeed(e.target.value)} placeholder="https://gto.example.com/feed.json" />
+                        </div>
+                    </div>
+                </div>
+
+                <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '16px' }}>
+                    <button onClick={handleSaveWooSettings} className="btn-primary">
+                        <Save size={16} style={{ marginRight: '6px' }} /> Save Settings
                     </button>
                 </div>
             </div>

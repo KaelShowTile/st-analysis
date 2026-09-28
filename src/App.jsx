@@ -1,8 +1,10 @@
 import { useEffect, useState } from 'react';
-import { Home, LayoutDashboard, Settings as SettingsIcon, Sun, Moon, Receipt, BarChart2, LogOut, Box, Calculator, Package } from 'lucide-react';
+import { Home, LayoutDashboard, Settings as SettingsIcon, Sun, Moon, Receipt, BarChart2, LogOut, Box, Calculator, Package, Loader2 } from 'lucide-react';
 import { getDb, getDbPath, getSetting } from './db/Database';
 import { appDataDir, join, dirname } from '@tauri-apps/api/path';
 import { copyFile, mkdir, readDir, remove, exists } from '@tauri-apps/plugin-fs';
+import { load } from '@tauri-apps/plugin-store';
+import { fetch as tauriFetch } from '@tauri-apps/plugin-http';
 import './App.css';
 import Dashboard from './pages/Dashboard';
 import Inventory from './pages/Inventory';
@@ -97,6 +99,41 @@ function App() {
           }
         }
 
+        const fetchProductFeeds = async () => {
+          try {
+            const store = await load('settings.json', { autoSave: false });
+            const chtUrl = await store.get('cht_feed');
+            const gtoUrl = await store.get('gto_feed');
+            
+            window.productFeeds = { cht: [], gto: [] };
+
+            const fetchFeed = async (url) => {
+              if (!url) return [];
+              try {
+                const res = await tauriFetch(url);
+                const data = await res.json();
+                return data.map(item => {
+                  const match = item.name?.match(/(.+)\s*\(Code:(.+)\)/i);
+                  let parsedName = item.name || '';
+                  let parsedCode = '';
+                  if (match) {
+                    parsedName = match[1].trim();
+                    parsedCode = match[2].trim();
+                  }
+                  return { ...item, parsedName, parsedCode };
+                });
+              } catch (e) {
+                console.error("Failed to fetch feed", url, e);
+                return [];
+              }
+            };
+
+            window.productFeeds.cht = await fetchFeed(chtUrl);
+            window.productFeeds.gto = await fetchFeed(gtoUrl);
+          } catch(e) { console.error("Error loading product feeds:", e); }
+        };
+        fetchProductFeeds();
+
         try {
           const tz = await getSetting('timezone');
           if (tz) window.__USER_TZ__ = tz;
@@ -155,7 +192,12 @@ function App() {
   }
 
   if (!dbReady) {
-    return <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh' }}>Loading...</div>;
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center', height: '100vh', gap: '16px', color: 'var(--text-color)', backgroundColor: 'var(--bg-color)' }}>
+        <Loader2 size={40} className="spin" color="var(--primary-color)" />
+        <div style={{ fontSize: '18px', fontWeight: 500 }}>Initializing System...</div>
+      </div>
+    );
   }
 
   if (!currentUser) {

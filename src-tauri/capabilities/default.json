@@ -8,11 +8,6 @@
   "permissions": [
     "core:default",
     "opener:default",
-    "sql:default",
-    "sql:allow-execute",
-    "sql:allow-select",
-    "sql:allow-load",
-    "sql:allow-close",
     "dialog:default",
     "dialog:allow-confirm",
     "dialog:allow-message",
@@ -100,10 +95,10 @@
       "identifier": "http:default",
       "allow": [
         {
-          "url": "https://findteu.showtile-apis.workers.dev/**"
+          "url": "http://*/**"
         },
         {
-          "url": "http://localhost:8787/**"
+          "url": "https://*/**"
         }
       ]
     }

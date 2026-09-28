@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { Search, Plus, Edit2, X, ChevronDown, ChevronRight, Package, Save , Wand2, Trash2} from 'lucide-react';
+import { Search, Plus, Edit2, X, ChevronDown, ChevronRight, Package, Save , Wand2, Trash2, Loader2} from 'lucide-react';
 import { getDb } from '../db/Database';
+import './Inventory.css';
 
 // Standard styles from other components
 const overlayStyle = {
@@ -14,12 +15,275 @@ const contentStyle = {
     maxHeight: '90vh', display: 'flex', flexDirection: 'column'
 };
 
+
+
+function ProductMatch() {
+    const [records, setRecords] = React.useState([]);
+    const [productsList, setProductsList] = React.useState([]);
+    const [loading, setLoading] = React.useState(false);
+    const [drafts, setDrafts] = React.useState({});
+
+    const loadRecords = async () => {
+        setLoading(true);
+        try {
+            const db = await getDb();
+            const res = await db.select("SELECT * FROM inventory WHERE (product_parent_id IS NULL OR product_parent_id = 0 OR product_parent_id = '') AND (x_inactive IS NULL OR x_inactive = 0 OR x_inactive = '') ORDER BY product_id DESC");
+            setRecords(res);
+            
+            const prods = await db.select("SELECT product_id, product_name FROM products ORDER BY product_name");
+            setProductsList(prods);
+        } catch(e) {
+            console.error(e);
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    React.useEffect(() => { loadRecords(); }, []);
+
+    const handleDraftChange = (id, field, value) => {
+        setDrafts(prev => ({
+            ...prev,
+            [id]: { ...(prev[id] || {}), [field]: value }
+        }));
+    };
+
+    const handleSave = async (record) => {
+        const draft = drafts[record.product_id] || {};
+        const updated = { ...record, ...draft };
+        
+        let parentId = record.product_parent_id;
+        if (draft.matched_product_name !== undefined) {
+            if (draft.matched_product_name) {
+                const matched = productsList.find(p => p.product_name === draft.matched_product_name);
+                parentId = matched ? matched.product_id : null;
+            } else {
+                parentId = null;
+            }
+        }
+
+        try {
+            const db = await getDb();
+            await db.execute(
+                "UPDATE inventory SET extracted_name = $1, extracted_finish = $2, extracted_colour = $3, extracted_size = $4, product_parent_id = $5 WHERE product_id = $6",
+                [updated.extracted_name, updated.extracted_finish, updated.extracted_colour, updated.extracted_size, parentId || null, record.product_id]
+            );
+            
+            if (parentId) {
+                setRecords(prev => prev.filter(r => r.product_id !== record.product_id));
+            } else {
+                setRecords(prev => prev.map(r => r.product_id === record.product_id ? { ...updated, product_parent_id: parentId } : r));
+            }
+            alert('Saved successfully!');
+        } catch(e) {
+            console.error(e);
+            alert('Failed to save');
+        }
+    };
+
+    const handleIgnore = async (id) => {
+        try {
+            const db = await getDb();
+            await db.execute("UPDATE inventory SET x_inactive = 1 WHERE product_id = $1", [id]);
+            setRecords(prev => prev.filter(r => r.product_id !== id));
+        } catch(e) { console.error(e); alert('Failed to ignore'); }
+    };
+
+    return (
+        <div className="inventory-container">
+            <datalist id="products-list-match">
+                {productsList.map(p => <option key={p.product_id} value={p.product_name} />)}
+            </datalist>
+            <div className="table-container" style={{ margin: '-10px 0 0 0' }}>
+                {loading ? (
+                    <div className="loading-spinner-container">
+                        <div className="spinner"></div>
+                        <p>Loading data, please wait...</p>
+                    </div>
+                ) : (
+                    <table className="data-table">
+                        <thead>
+                            <tr>
+                                <th>SKU</th>
+                                <th>Description</th>
+                                <th>Extracted Name</th>
+                                <th>Finish</th>
+                                <th>Colour</th>
+                                <th>Size</th>
+                                <th>Matched Product</th>
+                                <th style={{textAlign: 'center'}}>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {records.map(r => {
+                                const draft = drafts[r.product_id] || {};
+                                const eName = draft.extracted_name !== undefined ? draft.extracted_name : (r.extracted_name || '');
+                                const eFinish = draft.extracted_finish !== undefined ? draft.extracted_finish : (r.extracted_finish || '');
+                                const eColour = draft.extracted_colour !== undefined ? draft.extracted_colour : (r.extracted_colour || '');
+                                const eSize = draft.extracted_size !== undefined ? draft.extracted_size : (r.extracted_size || '');
+                                const mProduct = draft.matched_product_name !== undefined ? draft.matched_product_name : '';
+                                
+                                return (
+                                    <tr key={r.product_id}>
+                                        <td><span className="sku-badge">{r.sku}</span></td>
+                                        <td className="product-name" title={r.sales_description} style={{ maxWidth: '200px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{r.sales_description}</td>
+                                        <td><input type="text" className="search-input" style={{padding: '6px 12px', width: '100%', minWidth: '120px'}} value={eName} onChange={e => handleDraftChange(r.product_id, 'extracted_name', e.target.value)} /></td>
+                                        <td><input type="text" className="search-input" style={{padding: '6px 12px', width: '100%', minWidth: '100px'}} value={eFinish} onChange={e => handleDraftChange(r.product_id, 'extracted_finish', e.target.value)} /></td>
+                                        <td><input type="text" className="search-input" style={{padding: '6px 12px', width: '100%', minWidth: '100px'}} value={eColour} onChange={e => handleDraftChange(r.product_id, 'extracted_colour', e.target.value)} /></td>
+                                        <td><input type="text" className="search-input" style={{padding: '6px 12px', width: '100%', minWidth: '80px'}} value={eSize} onChange={e => handleDraftChange(r.product_id, 'extracted_size', e.target.value)} /></td>
+                                        <td><input type="text" list="products-list-match" className="search-input" style={{padding: '6px 12px', width: '100%', minWidth: '150px'}} value={mProduct} onChange={e => handleDraftChange(r.product_id, 'matched_product_name', e.target.value)} placeholder="Type to match..." /></td>
+                                        <td style={{ textAlign: 'center', whiteSpace: 'nowrap' }}>
+                                            <button className="btn-primary" style={{ padding: '6px 12px', fontSize: '0.8rem', marginRight: '8px' }} onClick={() => handleSave(r)}>Save</button>
+                                            <button className="btn-secondary" style={{ padding: '6px 12px', fontSize: '0.8rem', color: '#ef4444', borderColor: '#ef4444' }} onClick={() => handleIgnore(r.product_id)}>Ignore</button>
+                                        </td>
+                                    </tr>
+                                );
+                            })}
+                            {records.length === 0 && <tr><td colSpan="8" className="empty-state">No records to match.</td></tr>}
+                        </tbody>
+                    </table>
+                )}
+            </div>
+        </div>
+    );
+}
+
+function IgnoreRecords() {
+    const [records, setRecords] = React.useState([]);
+    const [productsList, setProductsList] = React.useState([]);
+    const [loading, setLoading] = React.useState(false);
+    const [drafts, setDrafts] = React.useState({});
+
+    const loadRecords = async () => {
+        setLoading(true);
+        try {
+            const db = await getDb();
+            const res = await db.select("SELECT * FROM inventory WHERE x_inactive = 1 OR x_inactive = '1' ORDER BY product_id DESC");
+            setRecords(res);
+
+            const prods = await db.select("SELECT product_id, product_name FROM products ORDER BY product_name");
+            setProductsList(prods);
+        } catch(e) { console.error(e); } finally { setLoading(false); }
+    };
+
+    React.useEffect(() => { loadRecords(); }, []);
+
+    const handleDraftChange = (id, field, value) => {
+        setDrafts(prev => ({
+            ...prev,
+            [id]: { ...(prev[id] || {}), [field]: value }
+        }));
+    };
+
+    const handleSave = async (record) => {
+        const draft = drafts[record.product_id] || {};
+        const updated = { ...record, ...draft };
+        
+        let parentId = record.product_parent_id;
+        if (draft.matched_product_name !== undefined) {
+            if (draft.matched_product_name) {
+                const matched = productsList.find(p => p.product_name === draft.matched_product_name);
+                parentId = matched ? matched.product_id : null;
+            } else {
+                parentId = null;
+            }
+        }
+
+        try {
+            const db = await getDb();
+            await db.execute(
+                "UPDATE inventory SET extracted_name = $1, extracted_finish = $2, extracted_colour = $3, extracted_size = $4, product_parent_id = $5 WHERE product_id = $6",
+                [updated.extracted_name, updated.extracted_finish, updated.extracted_colour, updated.extracted_size, parentId || null, record.product_id]
+            );
+            
+            if (parentId) {
+                setRecords(prev => prev.filter(r => r.product_id !== record.product_id));
+            } else {
+                setRecords(prev => prev.map(r => r.product_id === record.product_id ? { ...updated, product_parent_id: parentId } : r));
+            }
+            alert('Saved successfully!');
+        } catch(e) {
+            console.error(e);
+            alert('Failed to save');
+        }
+    };
+
+    const handleRestore = async (id) => {
+        try {
+            const db = await getDb();
+            await db.execute("UPDATE inventory SET x_inactive = 0 WHERE product_id = $1", [id]);
+            setRecords(prev => prev.filter(r => r.product_id !== id));
+        } catch(e) { console.error(e); alert('Failed to restore'); }
+    };
+
+    return (
+        <div className="inventory-container">
+            <datalist id="products-list-ignore">
+                {productsList.map(p => <option key={p.product_id} value={p.product_name} />)}
+            </datalist>
+            <div className="table-container" style={{ margin: '-10px 0 0 0' }}>
+                {loading ? (
+                    <div className="loading-spinner-container">
+                        <div className="spinner"></div>
+                        <p>Loading data, please wait...</p>
+                    </div>
+                ) : (
+                    <table className="data-table">
+                        <thead>
+                            <tr>
+                                <th>SKU</th>
+                                <th>Description</th>
+                                <th>Extracted Name</th>
+                                <th>Finish</th>
+                                <th>Colour</th>
+                                <th>Size</th>
+                                <th>Matched Product</th>
+                                <th style={{textAlign: 'center'}}>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {records.map(r => {
+                                const draft = drafts[r.product_id] || {};
+                                const eName = draft.extracted_name !== undefined ? draft.extracted_name : (r.extracted_name || '');
+                                const eFinish = draft.extracted_finish !== undefined ? draft.extracted_finish : (r.extracted_finish || '');
+                                const eColour = draft.extracted_colour !== undefined ? draft.extracted_colour : (r.extracted_colour || '');
+                                const eSize = draft.extracted_size !== undefined ? draft.extracted_size : (r.extracted_size || '');
+                                const mProduct = draft.matched_product_name !== undefined ? draft.matched_product_name : '';
+                                
+                                return (
+                                    <tr key={r.product_id}>
+                                        <td><span className="sku-badge">{r.sku}</span></td>
+                                        <td className="product-name" title={r.sales_description} style={{ maxWidth: '200px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{r.sales_description}</td>
+                                        <td><input type="text" className="search-input" style={{padding: '6px 12px', width: '100%', minWidth: '120px'}} value={eName} onChange={e => handleDraftChange(r.product_id, 'extracted_name', e.target.value)} /></td>
+                                        <td><input type="text" className="search-input" style={{padding: '6px 12px', width: '100%', minWidth: '100px'}} value={eFinish} onChange={e => handleDraftChange(r.product_id, 'extracted_finish', e.target.value)} /></td>
+                                        <td><input type="text" className="search-input" style={{padding: '6px 12px', width: '100%', minWidth: '100px'}} value={eColour} onChange={e => handleDraftChange(r.product_id, 'extracted_colour', e.target.value)} /></td>
+                                        <td><input type="text" className="search-input" style={{padding: '6px 12px', width: '100%', minWidth: '80px'}} value={eSize} onChange={e => handleDraftChange(r.product_id, 'extracted_size', e.target.value)} /></td>
+                                        <td><input type="text" list="products-list-ignore" className="search-input" style={{padding: '6px 12px', width: '100%', minWidth: '150px'}} value={mProduct} onChange={e => handleDraftChange(r.product_id, 'matched_product_name', e.target.value)} placeholder="Type to match..." /></td>
+                                        <td style={{ textAlign: 'center', whiteSpace: 'nowrap' }}>
+                                            <button className="btn-primary" style={{ padding: '6px 12px', fontSize: '0.8rem', marginRight: '8px' }} onClick={() => handleSave(r)}>Save</button>
+                                            <button className="btn-secondary" style={{ padding: '6px 12px', fontSize: '0.8rem', color: '#10b981', borderColor: '#10b981' }} onClick={() => handleRestore(r.product_id)}>Restore</button>
+                                        </td>
+                                    </tr>
+                                );
+                            })}
+                            {records.length === 0 && <tr><td colSpan="8" className="empty-state">No ignored records.</td></tr>}
+                        </tbody>
+                    </table>
+                )}
+            </div>
+        </div>
+    );
+}
+
+
 export default function Products() {
     const [collections, setCollections] = useState([]);
     const [products, setProducts] = useState([]);
     const [shippers, setShippers] = useState([]);
     const [attributes, setAttributes] = useState([]);
     const [search, setSearch] = useState('');
+    const [isLoading, setIsLoading] = useState(false);
+    const [mainTab, setMainTab] = useState('list');
 
     const [expandedCollections, setExpandedCollections] = useState({});
 
@@ -69,6 +333,7 @@ useEffect(() => {
     }, []);
 
     const loadData = async () => {
+        setIsLoading(true);
         try {
             const db = await getDb();
             const cols = await db.select("SELECT * FROM collections ORDER BY collection_name");
@@ -87,6 +352,8 @@ useEffect(() => {
             setExpandedCollections(expanded);
         } catch (e) {
             console.error("Failed to load products data:", e);
+        } finally {
+            setIsLoading(false);
         }
     };
 
@@ -116,6 +383,27 @@ useEffect(() => {
     };
 
     // --- Collection Modal ---
+    
+    const handleAutoMatchGlobalCollections = async () => {
+        if (!confirm('Scan inventory and create collections for unique extracted names?')) return;
+        try {
+            const db = await getDb();
+            const invs = await db.select("SELECT DISTINCT extracted_name FROM inventory WHERE (x_inactive IS NULL OR x_inactive != 1) AND extracted_name IS NOT NULL AND extracted_name != ''");
+            let count = 0;
+            for (let i of invs) {
+                const name = (i.extracted_name || '').trim();
+                if (!name) continue;
+                const exists = collections.find(c => c.collection_name.toLowerCase() === name.toLowerCase());
+                if (!exists) {
+                    await db.execute("INSERT INTO collections (collection_name, shipper_id) VALUES ($1, $2)", [name, '']);
+                    count++;
+                }
+            }
+            alert(`Auto match complete. Created ${count} new collections.`);
+            loadData();
+        } catch(e) { console.error(e); alert('Error'); }
+    };
+    
     const handleSaveCollection = async () => {
         try {
             const db = await getDb();
@@ -165,12 +453,12 @@ useEffect(() => {
                 );
             } else {
                 const defaultStock = JSON.stringify({ force_in_stock: false, backorder: false });
-                await db.execute(
+                var res = await db.select(
                     `INSERT INTO products (
                         product_name, product_description, collection_id, shipper_id,
                         color, finish, size, showtile_name, showtile_product_code,
                         showtile_price, gto_name, cht_name, m2_per_box, pcs_per_box, box_per_pallet, cht_and_gto_stock_status
-                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)`,
+                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16) RETURNING product_id as id`,
                     [
                         p.product_name, p.product_description, cId, sId, colorInput, finishInput, p.size,
                         p.showtile_name, p.showtile_product_code, stPrice, p.gto_name, p.cht_name,
@@ -187,6 +475,28 @@ useEffect(() => {
             if (finishInput) {
                 const exists = attributes.find(a => a.type === 'finish' && a.value.toLowerCase() === finishInput.toLowerCase());
                 if (!exists) await db.execute("INSERT INTO attributes (type, value) VALUES ('finish', $1)", [finishInput]);
+            }
+
+            // Link matching inventory
+            const targetId = p.id || (res && res.length > 0 ? res[0].id : null);
+            if (targetId) {
+                const col = collections.find(c => c.collection_id.toString() === (cId || '').toString());
+                const colName = col ? col.collection_name : '';
+                const matchingRows = await db.select(
+                    `
+                        SELECT product_id FROM inventory 
+                        WHERE (product_parent_id IS NULL OR product_parent_id = 0)
+                        AND lower(COALESCE(extracted_name, '')) = lower(COALESCE($1, ''))
+                        AND lower(COALESCE(extracted_colour, '')) = lower(COALESCE($2, ''))
+                        AND lower(COALESCE(extracted_finish, '')) = lower(COALESCE($3, ''))
+                        AND lower(COALESCE(extracted_size, '')) = lower(COALESCE($4, ''))
+                    `,
+                    [colName, colorInput, finishInput, p.size]
+                );
+                if (matchingRows && matchingRows.length > 0) {
+                    const ids = matchingRows.map(r => "'" + r.product_id + "'").join(',');
+                    await db.execute(`UPDATE inventory SET product_parent_id = ? WHERE product_id IN (${ids})`, [targetId]);
+                }
             }
 
             setShowProductModal(false);
@@ -278,14 +588,30 @@ useEffect(() => {
                     const pName = `${colName} ${color} ${finish} ${size}`.replace(/\s+/g, ' ').trim();
                     const defaultStock = JSON.stringify({ force_in_stock: false, backorder: false });
                     
-                    await db.execute(`
+                    const res = await db.select(`
                         INSERT INTO products (
                             product_name, collection_id, color, finish, size, 
                             showtile_name, showtile_product_code, showtile_price,
                             m2_per_box, pcs_per_box, box_per_pallet, cht_and_gto_stock_status
-                        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+                        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) RETURNING product_id as id
                     `, [pName, collection.collection_id, color, finish, size, showName, showCode, showPrice, m2, pcs, boxP, defaultStock]);
                     
+                    const newId = res[0].id;
+                    const matchingRows = await db.select(
+                        `
+                            SELECT product_id FROM inventory 
+                            WHERE (product_parent_id IS NULL OR product_parent_id = 0)
+                            AND lower(COALESCE(extracted_name, '')) = lower(COALESCE($1, ''))
+                            AND lower(COALESCE(extracted_colour, '')) = lower(COALESCE($2, ''))
+                            AND lower(COALESCE(extracted_finish, '')) = lower(COALESCE($3, ''))
+                            AND lower(COALESCE(extracted_size, '')) = lower(COALESCE($4, ''))
+                        `,
+                        [colName, color, finish, size]
+                    );
+                    if (matchingRows && matchingRows.length > 0) {
+                        const ids = matchingRows.map(r => "'" + r.product_id + "'").join(',');
+                        await db.execute(`UPDATE inventory SET product_parent_id = ? WHERE product_id IN (${ids})`, [newId]);
+                    }
                     createdCount++;
                 }
             }
@@ -377,7 +703,24 @@ useEffect(() => {
     return (
         <div className="page-content" style={{ padding: '24px', display: 'flex', flexDirection: 'column', height: '100%', boxSizing: 'border-box' }}>
             {/* Topbar */}
-            <div className="topbar" style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '24px', alignItems: 'center' }}>
+            
+            <div className="containers-subnav" style={{
+                display: 'flex',
+                gap: '16px',
+                padding: '12px 24px',
+                borderBottom: '1px solid var(--border-color)',
+                backgroundColor: 'var(--bg-color)',
+                zIndex: 10,
+                margin: '-24px -24px 24px -24px'
+            }}>
+                <button className={`subnav-btn ${mainTab === 'list' ? 'active' : ''}`} onClick={() => setMainTab('list')}>Product List</button>
+                <button className={`subnav-btn ${mainTab === 'match' ? 'active' : ''}`} onClick={() => setMainTab('match')}>Product Match</button>
+                <button className={`subnav-btn ${mainTab === 'ignore' ? 'active' : ''}`} onClick={() => setMainTab('ignore')}>Ignore Records</button>
+            </div>
+
+            <div style={{ display: mainTab === 'list' ? 'flex' : 'none', flexDirection: 'column', flex: 1, overflow: 'hidden' }}>
+            <div className="topbar"
+     style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '24px', alignItems: 'center' }}>
                 <div className="search-bar" style={{ display: 'flex', alignItems: 'center', background: 'white', padding: '8px 16px', borderRadius: '24px', border: '1px solid #e2e8f0', width: '300px' }}>
                     <Search size={18} style={{ color: '#94a3b8', marginRight: '8px' }} />
                     <input 
@@ -395,6 +738,9 @@ useEffect(() => {
                     }}>
                         <Plus size={16} /> Add Collection
                     </button>
+                    <button className="btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '8px 16px', borderRadius: '6px' }} onClick={handleAutoMatchGlobalCollections}>
+                        <Wand2 size={16} /> Auto Match Collection
+                    </button>
                     <button className="btn-primary" style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '8px 16px', borderRadius: '6px' }} onClick={() => {
                         setProductFormData(getInitialProductState());
                         setColorInput('');
@@ -411,8 +757,14 @@ useEffect(() => {
 
             {/* Main Area: Collections Accordion */}
             <div style={{ flex: 1, overflowY: 'auto', background: 'white', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
-                {collections.length === 0 && <div style={{ padding: '24px', textAlign: 'center', color: '#64748b' }}>No collections found.</div>}
-                {collections.map(collection => {
+                {isLoading ? (
+                    <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: '200px' }}>
+                        <Loader2 className="animate-spin" size={32} style={{ color: '#3b82f6' }} />
+                    </div>
+                ) : (
+                    <>
+                        {collections.length === 0 && <div style={{ padding: '24px', textAlign: 'center', color: '#64748b' }}>No collections found.</div>}
+                        {collections.map(collection => {
                     const collectionProducts = products.filter(p => p.collection_id === collection.collection_id).filter(p => {
                         if (!search) return true;
                         const term = search.toLowerCase();
@@ -535,9 +887,23 @@ useEffect(() => {
                         </div>
                     );
                 })}
+                    </>
+                )}
+            </div>
+
+
+            </div> {/* End list tab */}
+
+            <div style={{ display: mainTab === 'match' ? 'flex' : 'none', flexDirection: 'column', flex: 1, overflow: 'hidden' }}>
+                <ProductMatch />
+            </div>
+
+            <div style={{ display: mainTab === 'ignore' ? 'flex' : 'none', flexDirection: 'column', flex: 1, overflow: 'hidden' }}>
+                <IgnoreRecords />
             </div>
 
             {/* Collection Modal */}
+    
             {showCollectionModal && (
                 <div style={overlayStyle}>
                     <div style={{ ...contentStyle, width: '400px', maxHeight: '500px' }}>

@@ -1,5 +1,4 @@
-import Database from '@tauri-apps/plugin-sql';
-import { createClient } from '@libsql/client';
+import { invoke } from '@tauri-apps/api/core';
 import { load } from '@tauri-apps/plugin-store';
 import { appDataDir, join } from '@tauri-apps/api/path';
 import { exists, mkdir } from '@tauri-apps/plugin-fs';
@@ -50,7 +49,18 @@ export const getDb = async () => {
                     throw new Error("Missing Turso configuration");
                 }
                 
-                const client = createClient({ url, authToken });
+                const appDir = await appDataDir();
+                if (!(await exists(appDir))) {
+                    await mkdir(appDir, { recursive: true });
+                }
+                const dbPath = await join(appDir, 'turso_replica.db');
+                
+                try {
+                    await invoke('init_turso', { path: dbPath, url, token: authToken });
+                } catch (e) {
+                    console.error("Failed to initialize Turso replica:", e);
+                    throw e;
+                }
                 
                 const dbProxy = {
                     select: async (query, args = []) => {
@@ -71,12 +81,7 @@ export const getDb = async () => {
                         }
 
                         const fetchPromise = (async () => {
-                            const res = await client.execute({ sql: safeQuery, args });
-                            const data = res.rows.map(row => {
-                                const obj = {};
-                                res.columns.forEach(col => { obj[col] = row[col]; });
-                                return obj;
-                            });
+                            const data = await invoke('turso_select', { query: safeQuery, args });
                             queryCache.set(cacheKey, { data, timestamp: Date.now() });
                             return data;
                         })();
@@ -92,7 +97,7 @@ export const getDb = async () => {
                     execute: async (query, args = []) => {
                         const safeQuery = query.replace(/\$\d+/g, '?');
                         queryCache.clear();
-                        return await client.execute({ sql: safeQuery, args });
+                        return await invoke('turso_execute', { query: safeQuery, args });
                     },
                     close: async () => {}
                 };
@@ -108,28 +113,73 @@ export const getDb = async () => {
                 return dbProxy;
             } else {
                 const customPath = await store.get('customDbPath');
-                let connectionString;
+                let localDbPath;
                 if (customPath) {
-                    connectionString = `sqlite:${customPath}`;
+                    localDbPath = customPath;
                 } else {
                     const appDir = await appDataDir();
                     if (!(await exists(appDir))) {
                         await mkdir(appDir, { recursive: true });
                     }
-                    const defaultDbPath = await join(appDir, 'inventory.db');
-                    connectionString = `sqlite:${defaultDbPath}`;
+                    localDbPath = await join(appDir, 'inventory.db');
                 }
 
-                const db = await Database.load(connectionString);
-                await initializeTables(db);
+                try {
+                    await invoke('init_local', { path: localDbPath });
+                } catch (e) {
+                    console.error("Failed to initialize local SQLite database:", e);
+                    throw e;
+                }
                 
-                try { await db.execute('ALTER TABLE containers ADD COLUMN deposit TEXT'); } catch(e) {}
-                try { await db.execute('ALTER TABLE containers ADD COLUMN balance TEXT'); } catch(e) {}
-                try { await db.execute('ALTER TABLE containers ADD COLUMN payment_date TEXT'); } catch(e) {}
-                try { await db.execute('ALTER TABLE reports ADD COLUMN ignore INTEGER DEFAULT 0'); } catch(e) {}
+                const dbProxy = {
+                    select: async (query, args = []) => {
+                        const safeQuery = query.replace(/\$\d+/g, '?');
+                        const cacheKey = safeQuery + '|' + JSON.stringify(args);
+
+                        if (queryCache.has(cacheKey)) {
+                            const cached = queryCache.get(cacheKey);
+                            if (Date.now() - cached.timestamp < 15000) {
+                                return cached.data;
+                            } else {
+                                queryCache.delete(cacheKey);
+                            }
+                        }
+
+                        if (inFlightQueries.has(cacheKey)) {
+                            return await inFlightQueries.get(cacheKey);
+                        }
+
+                        const fetchPromise = (async () => {
+                            const data = await invoke('turso_select', { query: safeQuery, args });
+                            queryCache.set(cacheKey, { data, timestamp: Date.now() });
+                            return data;
+                        })();
+
+                        inFlightQueries.set(cacheKey, fetchPromise);
+                        try {
+                            const result = await fetchPromise;
+                            return result;
+                        } finally {
+                            inFlightQueries.delete(cacheKey);
+                        }
+                    },
+                    execute: async (query, args = []) => {
+                        const safeQuery = query.replace(/\$\d+/g, '?');
+                        queryCache.clear();
+                        return await invoke('turso_execute', { query: safeQuery, args });
+                    },
+                    close: async () => {}
+                };
+
+                await initializeTables(dbProxy);
+                
+                try { await dbProxy.execute('ALTER TABLE containers ADD COLUMN deposit TEXT'); } catch(e) {}
+                try { await dbProxy.execute('ALTER TABLE containers ADD COLUMN balance TEXT'); } catch(e) {}
+                try { await dbProxy.execute('ALTER TABLE containers ADD COLUMN payment_date TEXT'); } catch(e) {}
+                try { await dbProxy.execute('ALTER TABLE reports ADD COLUMN ignore INTEGER DEFAULT 0'); } catch(e) {}
                 
                 console.log('SQLite Database initialized successfully.');
-                return db;
+                return dbProxy;
             }
         })();
     }
@@ -449,6 +499,135 @@ const initializeTables = async (db) => {
             console.warn(`Could not drop column ${col} from containers. Older SQLite version?`, e);
         }
     }
+
+    try {
+        await db.execute('DROP TRIGGER IF EXISTS trg_inventory_ai');
+        await db.execute(`
+            CREATE TRIGGER trg_inventory_ai
+            AFTER INSERT ON inventory
+            BEGIN
+                UPDATE products 
+                SET cht_and_gto_stock_status = json_set(
+                    COALESCE(cht_and_gto_stock_status, '{"force_in_stock":false,"backorder":false,"max_stock":0}'),
+                    '$.max_stock', COALESCE((
+                        SELECT MAX(available) FROM inventory 
+                        WHERE product_parent_id = products.product_id 
+                        OR (
+                            lower(COALESCE(extracted_name, '')) = lower(COALESCE((SELECT collection_name FROM collections WHERE collection_id = products.collection_id), ''))
+                            AND lower(COALESCE(extracted_colour, '')) = lower(COALESCE(products.color, ''))
+                            AND lower(COALESCE(extracted_finish, '')) = lower(COALESCE(products.finish, ''))
+                            AND lower(COALESCE(extracted_size, '')) = lower(COALESCE(products.size, ''))
+                        )
+                    ), 0),
+                    '$.backorder', CASE WHEN EXISTS(
+                        SELECT 1 FROM inventory 
+                        WHERE (
+                            product_parent_id = products.product_id 
+                            OR (
+                                lower(COALESCE(extracted_name, '')) = lower(COALESCE((SELECT collection_name FROM collections WHERE collection_id = products.collection_id), ''))
+                                AND lower(COALESCE(extracted_colour, '')) = lower(COALESCE(products.color, ''))
+                                AND lower(COALESCE(extracted_finish, '')) = lower(COALESCE(products.finish, ''))
+                                AND lower(COALESCE(extracted_size, '')) = lower(COALESCE(products.size, ''))
+                            )
+                        ) AND backorder = 1
+                    ) THEN json('true') ELSE json('false') END
+                )
+                WHERE product_id = NEW.product_parent_id 
+                OR (
+                    lower(COALESCE((SELECT collection_name FROM collections WHERE collection_id = products.collection_id), '')) = lower(COALESCE(NEW.extracted_name, ''))
+                    AND lower(COALESCE(products.color, '')) = lower(COALESCE(NEW.extracted_colour, ''))
+                    AND lower(COALESCE(products.finish, '')) = lower(COALESCE(NEW.extracted_finish, ''))
+                    AND lower(COALESCE(products.size, '')) = lower(COALESCE(NEW.extracted_size, ''))
+                );
+            END;
+        `);
+    } catch(e) { console.warn('trg_inventory_ai failed', e); }
+
+    try {
+        await db.execute('DROP TRIGGER IF EXISTS trg_inventory_au');
+        await db.execute(`
+            CREATE TRIGGER trg_inventory_au
+            AFTER UPDATE ON inventory
+            BEGIN
+                UPDATE products 
+                SET cht_and_gto_stock_status = json_set(
+                    COALESCE(cht_and_gto_stock_status, '{"force_in_stock":false,"backorder":false,"max_stock":0}'),
+                    '$.max_stock', COALESCE((
+                        SELECT MAX(available) FROM inventory 
+                        WHERE product_parent_id = products.product_id 
+                        OR (
+                            lower(COALESCE(extracted_name, '')) = lower(COALESCE((SELECT collection_name FROM collections WHERE collection_id = products.collection_id), ''))
+                            AND lower(COALESCE(extracted_colour, '')) = lower(COALESCE(products.color, ''))
+                            AND lower(COALESCE(extracted_finish, '')) = lower(COALESCE(products.finish, ''))
+                            AND lower(COALESCE(extracted_size, '')) = lower(COALESCE(products.size, ''))
+                        )
+                    ), 0),
+                    '$.backorder', CASE WHEN EXISTS(
+                        SELECT 1 FROM inventory 
+                        WHERE (
+                            product_parent_id = products.product_id 
+                            OR (
+                                lower(COALESCE(extracted_name, '')) = lower(COALESCE((SELECT collection_name FROM collections WHERE collection_id = products.collection_id), ''))
+                                AND lower(COALESCE(extracted_colour, '')) = lower(COALESCE(products.color, ''))
+                                AND lower(COALESCE(extracted_finish, '')) = lower(COALESCE(products.finish, ''))
+                                AND lower(COALESCE(extracted_size, '')) = lower(COALESCE(products.size, ''))
+                            )
+                        ) AND backorder = 1
+                    ) THEN json('true') ELSE json('false') END
+                )
+                WHERE product_id = NEW.product_parent_id 
+                OR (
+                    lower(COALESCE((SELECT collection_name FROM collections WHERE collection_id = products.collection_id), '')) = lower(COALESCE(NEW.extracted_name, ''))
+                    AND lower(COALESCE(products.color, '')) = lower(COALESCE(NEW.extracted_colour, ''))
+                    AND lower(COALESCE(products.finish, '')) = lower(COALESCE(NEW.extracted_finish, ''))
+                    AND lower(COALESCE(products.size, '')) = lower(COALESCE(NEW.extracted_size, ''))
+                );
+            END;
+        `);
+    } catch(e) { console.warn('trg_inventory_au failed', e); }
+
+    try {
+        await db.execute('DROP TRIGGER IF EXISTS trg_inventory_ad');
+        await db.execute(`
+            CREATE TRIGGER trg_inventory_ad
+            AFTER DELETE ON inventory
+            BEGIN
+                UPDATE products 
+                SET cht_and_gto_stock_status = json_set(
+                    COALESCE(cht_and_gto_stock_status, '{"force_in_stock":false,"backorder":false,"max_stock":0}'),
+                    '$.max_stock', COALESCE((
+                        SELECT MAX(available) FROM inventory 
+                        WHERE product_parent_id = products.product_id 
+                        OR (
+                            lower(COALESCE(extracted_name, '')) = lower(COALESCE((SELECT collection_name FROM collections WHERE collection_id = products.collection_id), ''))
+                            AND lower(COALESCE(extracted_colour, '')) = lower(COALESCE(products.color, ''))
+                            AND lower(COALESCE(extracted_finish, '')) = lower(COALESCE(products.finish, ''))
+                            AND lower(COALESCE(extracted_size, '')) = lower(COALESCE(products.size, ''))
+                        )
+                    ), 0),
+                    '$.backorder', CASE WHEN EXISTS(
+                        SELECT 1 FROM inventory 
+                        WHERE (
+                            product_parent_id = products.product_id 
+                            OR (
+                                lower(COALESCE(extracted_name, '')) = lower(COALESCE((SELECT collection_name FROM collections WHERE collection_id = products.collection_id), ''))
+                                AND lower(COALESCE(extracted_colour, '')) = lower(COALESCE(products.color, ''))
+                                AND lower(COALESCE(extracted_finish, '')) = lower(COALESCE(products.finish, ''))
+                                AND lower(COALESCE(extracted_size, '')) = lower(COALESCE(products.size, ''))
+                            )
+                        ) AND backorder = 1
+                    ) THEN json('true') ELSE json('false') END
+                )
+                WHERE product_id = OLD.product_parent_id 
+                OR (
+                    lower(COALESCE((SELECT collection_name FROM collections WHERE collection_id = products.collection_id), '')) = lower(COALESCE(OLD.extracted_name, ''))
+                    AND lower(COALESCE(products.color, '')) = lower(COALESCE(OLD.extracted_colour, ''))
+                    AND lower(COALESCE(products.finish, '')) = lower(COALESCE(OLD.extracted_finish, ''))
+                    AND lower(COALESCE(products.size, '')) = lower(COALESCE(OLD.extracted_size, ''))
+                );
+            END;
+        `);
+    } catch(e) { console.warn('trg_inventory_ad failed', e); }
 
     // Auth System
     await db.execute(`

@@ -99,3 +99,16 @@
 .theme-toggle:hover {
   background-color: var(--border-color);
 }
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+.spin {
+  animation: spin 1s linear infinite;
+}
+
+.animate-spin {
+  animation: spin 1s linear infinite;
+}
