@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Search, Plus, Edit2, X, ChevronDown, ChevronRight, Package, Save , Wand2, Trash2, Loader2} from 'lucide-react';
+import { Search, Plus, Edit2, Edit3, X, ChevronDown, ChevronRight, Package, Save, Wand2, Trash2, Loader2 } from 'lucide-react';
 import { getDb } from '../db/Database';
 import './Inventory.css';
 
@@ -17,11 +17,14 @@ const contentStyle = {
 
 
 
+
 function ProductMatch() {
     const [records, setRecords] = React.useState([]);
     const [productsList, setProductsList] = React.useState([]);
+    const [attributes, setAttributes] = React.useState({ colours: [], finishes: [] });
     const [loading, setLoading] = React.useState(false);
     const [drafts, setDrafts] = React.useState({});
+    const [editModal, setEditModal] = React.useState({ show: false, item: null, field: '', val: '', options: [] });
 
     const loadRecords = async () => {
         setLoading(true);
@@ -29,10 +32,16 @@ function ProductMatch() {
             const db = await getDb();
             const res = await db.select("SELECT * FROM inventory WHERE (product_parent_id IS NULL OR product_parent_id = 0 OR product_parent_id = '') AND (x_inactive IS NULL OR x_inactive = 0 OR x_inactive = '') ORDER BY product_id DESC");
             setRecords(res);
-            
+
             const prods = await db.select("SELECT product_id, product_name FROM products ORDER BY product_name");
             setProductsList(prods);
-        } catch(e) {
+
+            const attrs = await db.select('SELECT type, value FROM attributes');
+            setAttributes({
+                colours: attrs.filter(a => a.type === 'colour').map(a => a.value),
+                finishes: attrs.filter(a => a.type === 'finish').map(a => a.value),
+            });
+        } catch (e) {
             console.error(e);
         } finally {
             setLoading(false);
@@ -48,10 +57,15 @@ function ProductMatch() {
         }));
     };
 
+    const handleSaveEdit = () => {
+        handleDraftChange(editModal.item.product_id, editModal.field, editModal.val);
+        setEditModal({ ...editModal, show: false });
+    };
+
     const handleSave = async (record) => {
         const draft = drafts[record.product_id] || {};
         const updated = { ...record, ...draft };
-        
+
         let parentId = record.product_parent_id;
         if (draft.matched_product_name !== undefined) {
             if (draft.matched_product_name) {
@@ -68,14 +82,14 @@ function ProductMatch() {
                 "UPDATE inventory SET extracted_name = $1, extracted_finish = $2, extracted_colour = $3, extracted_size = $4, product_parent_id = $5 WHERE product_id = $6",
                 [updated.extracted_name, updated.extracted_finish, updated.extracted_colour, updated.extracted_size, parentId || null, record.product_id]
             );
-            
+
             if (parentId) {
                 setRecords(prev => prev.filter(r => r.product_id !== record.product_id));
             } else {
                 setRecords(prev => prev.map(r => r.product_id === record.product_id ? { ...updated, product_parent_id: parentId } : r));
             }
             alert('Saved successfully!');
-        } catch(e) {
+        } catch (e) {
             console.error(e);
             alert('Failed to save');
         }
@@ -86,7 +100,7 @@ function ProductMatch() {
             const db = await getDb();
             await db.execute("UPDATE inventory SET x_inactive = 1 WHERE product_id = $1", [id]);
             setRecords(prev => prev.filter(r => r.product_id !== id));
-        } catch(e) { console.error(e); alert('Failed to ignore'); }
+        } catch (e) { console.error(e); alert('Failed to ignore'); }
     };
 
     return (
@@ -104,14 +118,14 @@ function ProductMatch() {
                     <table className="data-table">
                         <thead>
                             <tr>
-                                <th>SKU</th>
+                                <th style={{ width: '100px' }}>SKU</th>
                                 <th>Description</th>
-                                <th>Extracted Name</th>
-                                <th>Finish</th>
-                                <th>Colour</th>
-                                <th>Size</th>
+                                <th style={{ width: '250px' }}>Extracted Name</th>
+                                <th style={{ width: '100px' }}>Finish</th>
+                                <th style={{ width: '100px' }}>Colour</th>
+                                <th style={{ width: '100px' }}>Size</th>
                                 <th>Matched Product</th>
-                                <th style={{textAlign: 'center'}}>Actions</th>
+                                <th style={{ textAlign: 'center', width: '150px' }}>Actions</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -122,17 +136,27 @@ function ProductMatch() {
                                 const eColour = draft.extracted_colour !== undefined ? draft.extracted_colour : (r.extracted_colour || '');
                                 const eSize = draft.extracted_size !== undefined ? draft.extracted_size : (r.extracted_size || '');
                                 const mProduct = draft.matched_product_name !== undefined ? draft.matched_product_name : '';
-                                
+
                                 return (
                                     <tr key={r.product_id}>
                                         <td><span className="sku-badge">{r.sku}</span></td>
                                         <td className="product-name" title={r.sales_description} style={{ maxWidth: '200px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{r.sales_description}</td>
-                                        <td><input type="text" className="search-input" style={{padding: '6px 12px', width: '100%', minWidth: '120px'}} value={eName} onChange={e => handleDraftChange(r.product_id, 'extracted_name', e.target.value)} /></td>
-                                        <td><input type="text" className="search-input" style={{padding: '6px 12px', width: '100%', minWidth: '100px'}} value={eFinish} onChange={e => handleDraftChange(r.product_id, 'extracted_finish', e.target.value)} /></td>
-                                        <td><input type="text" className="search-input" style={{padding: '6px 12px', width: '100%', minWidth: '100px'}} value={eColour} onChange={e => handleDraftChange(r.product_id, 'extracted_colour', e.target.value)} /></td>
-                                        <td><input type="text" className="search-input" style={{padding: '6px 12px', width: '100%', minWidth: '80px'}} value={eSize} onChange={e => handleDraftChange(r.product_id, 'extracted_size', e.target.value)} /></td>
-                                        <td><input type="text" list="products-list-match" className="search-input" style={{padding: '6px 12px', width: '100%', minWidth: '150px'}} value={mProduct} onChange={e => handleDraftChange(r.product_id, 'matched_product_name', e.target.value)} placeholder="Type to match..." /></td>
-                                        <td style={{ textAlign: 'center', whiteSpace: 'nowrap' }}>
+
+                                        <td className="editable-cell product-name" title="Click to edit" onClick={() => setEditModal({ show: true, item: r, field: 'extracted_name', val: eName, options: [] })}>
+                                            {eName} <Edit3 size={12} className="edit-icon" />
+                                        </td>
+                                        <td className="editable-cell" title="Click to edit" onClick={() => setEditModal({ show: true, item: r, field: 'extracted_finish', val: eFinish, options: attributes.finishes })}>
+                                            {eFinish && <span className="param-badge finish">{eFinish}</span>} <Edit3 size={12} className="edit-icon" />
+                                        </td>
+                                        <td className="editable-cell" title="Click to edit" onClick={() => setEditModal({ show: true, item: r, field: 'extracted_colour', val: eColour, options: attributes.colours })}>
+                                            {eColour && <span className="param-badge colour">{eColour}</span>} <Edit3 size={12} className="edit-icon" />
+                                        </td>
+                                        <td className="editable-cell" title="Click to edit" onClick={() => setEditModal({ show: true, item: r, field: 'extracted_size', val: eSize, options: [] })}>
+                                            {eSize && <span className="param-badge size">{eSize}</span>} <Edit3 size={12} className="edit-icon" />
+                                        </td>
+
+                                        <td><input type="text" list="products-list-match" className="search-input" style={{ padding: '6px 12px', width: '100%', minWidth: '150px' }} value={mProduct} onChange={e => handleDraftChange(r.product_id, 'matched_product_name', e.target.value)} placeholder="Type to match..." /></td>
+                                        <td style={{ textAlign: 'center', whiteSpace: 'nowrap', display: 'flex' }}>
                                             <button className="btn-primary" style={{ padding: '6px 12px', fontSize: '0.8rem', marginRight: '8px' }} onClick={() => handleSave(r)}>Save</button>
                                             <button className="btn-secondary" style={{ padding: '6px 12px', fontSize: '0.8rem', color: '#ef4444', borderColor: '#ef4444' }} onClick={() => handleIgnore(r.product_id)}>Ignore</button>
                                         </td>
@@ -144,6 +168,37 @@ function ProductMatch() {
                     </table>
                 )}
             </div>
+
+            {editModal.show && (
+                <div className="modal-overlay" onClick={() => setEditModal({ ...editModal, show: false })}>
+                    <div className="modal-content" onClick={e => e.stopPropagation()}>
+                        <div className="modal-header">
+                            <h3>Edit {editModal.field.replace('extracted_', '')}</h3>
+                            <X size={20} style={{ cursor: 'pointer' }} onClick={() => setEditModal({ ...editModal, show: false })} />
+                        </div>
+                        <div className="modal-body">
+                            <input
+                                type="text"
+                                className="modal-input"
+                                style={{ padding: '10px', width: '100%', boxSizing: 'border-box' }}
+                                value={editModal.val}
+                                onChange={e => setEditModal({ ...editModal, val: e.target.value })}
+                                list={editModal.options.length > 0 ? "edit-options-list-match" : undefined}
+                                autoFocus
+                                placeholder="new value"
+                            />
+                            {editModal.options.length > 0 && (
+                                <datalist id="edit-options-list-match">
+                                    {editModal.options.map((opt, i) => <option key={i} value={opt} />)}
+                                </datalist>
+                            )}
+                            <button className="btn-upload btn-full" onClick={handleSaveEdit} style={{ marginTop: '20px', background: 'var(--primary-color)', color: 'white', border: 'none', width: '100%' }}>
+                                <Save size={16} /> Save Changes
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
         </div>
     );
 }
@@ -151,8 +206,10 @@ function ProductMatch() {
 function IgnoreRecords() {
     const [records, setRecords] = React.useState([]);
     const [productsList, setProductsList] = React.useState([]);
+    const [attributes, setAttributes] = React.useState({ colours: [], finishes: [] });
     const [loading, setLoading] = React.useState(false);
     const [drafts, setDrafts] = React.useState({});
+    const [editModal, setEditModal] = React.useState({ show: false, item: null, field: '', val: '', options: [] });
 
     const loadRecords = async () => {
         setLoading(true);
@@ -163,7 +220,13 @@ function IgnoreRecords() {
 
             const prods = await db.select("SELECT product_id, product_name FROM products ORDER BY product_name");
             setProductsList(prods);
-        } catch(e) { console.error(e); } finally { setLoading(false); }
+
+            const attrs = await db.select('SELECT type, value FROM attributes');
+            setAttributes({
+                colours: attrs.filter(a => a.type === 'colour').map(a => a.value),
+                finishes: attrs.filter(a => a.type === 'finish').map(a => a.value),
+            });
+        } catch (e) { console.error(e); } finally { setLoading(false); }
     };
 
     React.useEffect(() => { loadRecords(); }, []);
@@ -175,10 +238,15 @@ function IgnoreRecords() {
         }));
     };
 
+    const handleSaveEdit = () => {
+        handleDraftChange(editModal.item.product_id, editModal.field, editModal.val);
+        setEditModal({ ...editModal, show: false });
+    };
+
     const handleSave = async (record) => {
         const draft = drafts[record.product_id] || {};
         const updated = { ...record, ...draft };
-        
+
         let parentId = record.product_parent_id;
         if (draft.matched_product_name !== undefined) {
             if (draft.matched_product_name) {
@@ -195,14 +263,14 @@ function IgnoreRecords() {
                 "UPDATE inventory SET extracted_name = $1, extracted_finish = $2, extracted_colour = $3, extracted_size = $4, product_parent_id = $5 WHERE product_id = $6",
                 [updated.extracted_name, updated.extracted_finish, updated.extracted_colour, updated.extracted_size, parentId || null, record.product_id]
             );
-            
+
             if (parentId) {
                 setRecords(prev => prev.filter(r => r.product_id !== record.product_id));
             } else {
                 setRecords(prev => prev.map(r => r.product_id === record.product_id ? { ...updated, product_parent_id: parentId } : r));
             }
             alert('Saved successfully!');
-        } catch(e) {
+        } catch (e) {
             console.error(e);
             alert('Failed to save');
         }
@@ -213,7 +281,7 @@ function IgnoreRecords() {
             const db = await getDb();
             await db.execute("UPDATE inventory SET x_inactive = 0 WHERE product_id = $1", [id]);
             setRecords(prev => prev.filter(r => r.product_id !== id));
-        } catch(e) { console.error(e); alert('Failed to restore'); }
+        } catch (e) { console.error(e); alert('Failed to restore'); }
     };
 
     return (
@@ -231,14 +299,14 @@ function IgnoreRecords() {
                     <table className="data-table">
                         <thead>
                             <tr>
-                                <th>SKU</th>
+                                <th style={{ width: '100px' }}>SKU</th>
                                 <th>Description</th>
-                                <th>Extracted Name</th>
-                                <th>Finish</th>
-                                <th>Colour</th>
-                                <th>Size</th>
+                                <th style={{ width: '250px' }}>Extracted Name</th>
+                                <th style={{ width: '100px' }}>Finish</th>
+                                <th style={{ width: '100px' }}>Colour</th>
+                                <th style={{ width: '100px' }}>Size</th>
                                 <th>Matched Product</th>
-                                <th style={{textAlign: 'center'}}>Actions</th>
+                                <th style={{ textAlign: 'center', width: '150px' }}>Actions</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -249,17 +317,27 @@ function IgnoreRecords() {
                                 const eColour = draft.extracted_colour !== undefined ? draft.extracted_colour : (r.extracted_colour || '');
                                 const eSize = draft.extracted_size !== undefined ? draft.extracted_size : (r.extracted_size || '');
                                 const mProduct = draft.matched_product_name !== undefined ? draft.matched_product_name : '';
-                                
+
                                 return (
                                     <tr key={r.product_id}>
                                         <td><span className="sku-badge">{r.sku}</span></td>
                                         <td className="product-name" title={r.sales_description} style={{ maxWidth: '200px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{r.sales_description}</td>
-                                        <td><input type="text" className="search-input" style={{padding: '6px 12px', width: '100%', minWidth: '120px'}} value={eName} onChange={e => handleDraftChange(r.product_id, 'extracted_name', e.target.value)} /></td>
-                                        <td><input type="text" className="search-input" style={{padding: '6px 12px', width: '100%', minWidth: '100px'}} value={eFinish} onChange={e => handleDraftChange(r.product_id, 'extracted_finish', e.target.value)} /></td>
-                                        <td><input type="text" className="search-input" style={{padding: '6px 12px', width: '100%', minWidth: '100px'}} value={eColour} onChange={e => handleDraftChange(r.product_id, 'extracted_colour', e.target.value)} /></td>
-                                        <td><input type="text" className="search-input" style={{padding: '6px 12px', width: '100%', minWidth: '80px'}} value={eSize} onChange={e => handleDraftChange(r.product_id, 'extracted_size', e.target.value)} /></td>
-                                        <td><input type="text" list="products-list-ignore" className="search-input" style={{padding: '6px 12px', width: '100%', minWidth: '150px'}} value={mProduct} onChange={e => handleDraftChange(r.product_id, 'matched_product_name', e.target.value)} placeholder="Type to match..." /></td>
-                                        <td style={{ textAlign: 'center', whiteSpace: 'nowrap' }}>
+
+                                        <td className="editable-cell product-name" title="Click to edit" onClick={() => setEditModal({ show: true, item: r, field: 'extracted_name', val: eName, options: [] })}>
+                                            {eName} <Edit3 size={12} className="edit-icon" />
+                                        </td>
+                                        <td className="editable-cell" title="Click to edit" onClick={() => setEditModal({ show: true, item: r, field: 'extracted_finish', val: eFinish, options: attributes.finishes })}>
+                                            {eFinish && <span className="param-badge finish">{eFinish}</span>} <Edit3 size={12} className="edit-icon" />
+                                        </td>
+                                        <td className="editable-cell" title="Click to edit" onClick={() => setEditModal({ show: true, item: r, field: 'extracted_colour', val: eColour, options: attributes.colours })}>
+                                            {eColour && <span className="param-badge colour">{eColour}</span>} <Edit3 size={12} className="edit-icon" />
+                                        </td>
+                                        <td className="editable-cell" title="Click to edit" onClick={() => setEditModal({ show: true, item: r, field: 'extracted_size', val: eSize, options: [] })}>
+                                            {eSize && <span className="param-badge size">{eSize}</span>} <Edit3 size={12} className="edit-icon" />
+                                        </td>
+
+                                        <td><input type="text" list="products-list-ignore" className="search-input" style={{ padding: '6px 12px', width: '100%', minWidth: '150px' }} value={mProduct} onChange={e => handleDraftChange(r.product_id, 'matched_product_name', e.target.value)} placeholder="Type to match..." /></td>
+                                        <td style={{ textAlign: 'center', whiteSpace: 'nowrap', display: 'flex' }}>
                                             <button className="btn-primary" style={{ padding: '6px 12px', fontSize: '0.8rem', marginRight: '8px' }} onClick={() => handleSave(r)}>Save</button>
                                             <button className="btn-secondary" style={{ padding: '6px 12px', fontSize: '0.8rem', color: '#10b981', borderColor: '#10b981' }} onClick={() => handleRestore(r.product_id)}>Restore</button>
                                         </td>
@@ -271,6 +349,37 @@ function IgnoreRecords() {
                     </table>
                 )}
             </div>
+
+            {editModal.show && (
+                <div className="modal-overlay" onClick={() => setEditModal({ ...editModal, show: false })}>
+                    <div className="modal-content" onClick={e => e.stopPropagation()}>
+                        <div className="modal-header">
+                            <h3>Edit {editModal.field.replace('extracted_', '')}</h3>
+                            <X size={20} style={{ cursor: 'pointer' }} onClick={() => setEditModal({ ...editModal, show: false })} />
+                        </div>
+                        <div className="modal-body">
+                            <input
+                                type="text"
+                                className="modal-input"
+                                style={{ padding: '10px', width: '100%', boxSizing: 'border-box' }}
+                                value={editModal.val}
+                                onChange={e => setEditModal({ ...editModal, val: e.target.value })}
+                                list={editModal.options.length > 0 ? "edit-options-list-ignore" : undefined}
+                                autoFocus
+                                placeholder="new value"
+                            />
+                            {editModal.options.length > 0 && (
+                                <datalist id="edit-options-list-ignore">
+                                    {editModal.options.map((opt, i) => <option key={i} value={opt} />)}
+                                </datalist>
+                            )}
+                            <button className="btn-upload btn-full" onClick={handleSaveEdit} style={{ marginTop: '20px', background: 'var(--primary-color)', color: 'white', border: 'none', width: '100%' }}>
+                                <Save size={16} /> Save Changes
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
         </div>
     );
 }
@@ -306,10 +415,10 @@ export default function Products() {
         try {
             const db = await getDb();
             if (pId) {
-                 const col = collections.find(c => c.collection_id.toString() === (colId || '').toString());
-                 const colName = col ? col.collection_name : '';
-                 
-                 const invs = await db.select(`
+                const col = collections.find(c => c.collection_id.toString() === (colId || '').toString());
+                const colName = col ? col.collection_name : '';
+
+                const invs = await db.select(`
                      SELECT sku, available, holding, so_qty, total_qty, cost, backorder, backorder_amount 
                      FROM inventory 
                      WHERE product_parent_id = $1
@@ -320,15 +429,15 @@ export default function Products() {
                          AND lower(extracted_size) = lower($5)
                      )
                  `, [pId, colName || '', color || '', finish || '', size || '']);
-                 setProductInventory(invs);
+                setProductInventory(invs);
             } else {
-                 setProductInventory([]);
+                setProductInventory([]);
             }
-        } catch(e) { 
-            console.error(e); 
+        } catch (e) {
+            console.error(e);
         }
     };
-useEffect(() => {
+    useEffect(() => {
         loadData();
     }, []);
 
@@ -383,7 +492,7 @@ useEffect(() => {
     };
 
     // --- Collection Modal ---
-    
+
     const handleAutoMatchGlobalCollections = async () => {
         if (!confirm('Scan inventory and create collections for unique extracted names?')) return;
         try {
@@ -401,9 +510,9 @@ useEffect(() => {
             }
             alert(`Auto match complete. Created ${count} new collections.`);
             loadData();
-        } catch(e) { console.error(e); alert('Error'); }
+        } catch (e) { console.error(e); alert('Error'); }
     };
-    
+
     const handleSaveCollection = async () => {
         try {
             const db = await getDb();
@@ -506,7 +615,7 @@ useEffect(() => {
         }
     };
 
-    
+
     const handleDeleteCollection = async (e, collection) => {
         e.stopPropagation();
         if (confirm(`Are you sure you want to delete collection "${collection.collection_name}" and ALL its products?`)) {
@@ -520,7 +629,7 @@ useEffect(() => {
                 await db.execute("DELETE FROM products WHERE collection_id = $1", [collection.collection_id]);
                 await db.execute("DELETE FROM collections WHERE collection_id = $1", [collection.collection_id]);
                 loadData();
-            } catch(err) {
+            } catch (err) {
                 console.error(err);
                 alert("Failed to delete collection.");
             }
@@ -533,7 +642,7 @@ useEffect(() => {
         try {
             const db = await getDb();
             const colName = collection.collection_name;
-            
+
             const query = `
                 SELECT extracted_colour, extracted_finish, extracted_size, MAX(product_id) as latest_inv_id 
                 FROM inventory 
@@ -541,36 +650,36 @@ useEffect(() => {
                 GROUP BY extracted_colour, extracted_finish, extracted_size
             `;
             const groups = await db.select(query, [colName]);
-            
+
             if (!groups || groups.length === 0) {
                 alert("No matching inventory records found for this collection.");
                 return;
             }
-            
+
             let createdCount = 0;
             for (const g of groups) {
                 const color = g.extracted_colour || '';
                 const finish = g.extracted_finish || '';
                 const size = g.extracted_size || '';
-                
-                const exists = products.find(p => 
-                    p.collection_id === collection.collection_id && 
-                    (p.color || '').toLowerCase() === color.toLowerCase() && 
-                    (p.finish || '').toLowerCase() === finish.toLowerCase() && 
+
+                const exists = products.find(p =>
+                    p.collection_id === collection.collection_id &&
+                    (p.color || '').toLowerCase() === color.toLowerCase() &&
+                    (p.finish || '').toLowerCase() === finish.toLowerCase() &&
                     (p.size || '').toLowerCase() === size.toLowerCase()
                 );
-                
+
                 if (!exists) {
                     const invDetails = await db.select(`SELECT * FROM inventory WHERE product_id = $1`, [g.latest_inv_id]);
                     const inv = invDetails && invDetails.length > 0 ? invDetails[0] : null;
-                    
+
                     let showCode = '';
                     let showName = '';
                     let showPrice = '';
                     let m2 = '';
                     let pcs = '';
                     let boxP = '';
-                    
+
                     if (inv) {
                         if (inv.showtile_name) {
                             const parts = inv.showtile_name.trim().split(' ');
@@ -584,10 +693,10 @@ useEffect(() => {
                         pcs = inv.pcs_per_box || '';
                         boxP = inv.box_per_pallet || '';
                     }
-                    
+
                     const pName = `${colName} ${color} ${finish} ${size}`.replace(/\s+/g, ' ').trim();
                     const defaultStock = JSON.stringify({ force_in_stock: false, backorder: false });
-                    
+
                     const res = await db.select(`
                         INSERT INTO products (
                             product_name, collection_id, color, finish, size, 
@@ -595,7 +704,7 @@ useEffect(() => {
                             m2_per_box, pcs_per_box, box_per_pallet, cht_and_gto_stock_status
                         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) RETURNING product_id as id
                     `, [pName, collection.collection_id, color, finish, size, showName, showCode, showPrice, m2, pcs, boxP, defaultStock]);
-                    
+
                     const newId = res[0].id;
                     const matchingRows = await db.select(
                         `
@@ -615,14 +724,14 @@ useEffect(() => {
                     createdCount++;
                 }
             }
-            
+
             if (createdCount > 0) {
                 alert(`Auto match complete. Created ${createdCount} new product(s).`);
                 loadData();
             } else {
                 alert("Auto match complete. No new products needed to be created.");
             }
-        } catch(e) {
+        } catch (e) {
             console.error(e);
             alert("Error during auto match.");
         }
@@ -637,10 +746,10 @@ useEffect(() => {
             const color = productFormData.color || colorInput || '';
             const finish = productFormData.finish || finishInput || '';
             const size = productFormData.size || '';
-            
+
             let query = `SELECT * FROM inventory WHERE (backorder IS NULL OR backorder != 1) AND (product_parent_id = $1 OR (lower(extracted_name) = lower($2) AND lower(extracted_colour) = lower($3) AND lower(extracted_finish) = lower($4) AND lower(extracted_size) = lower($5))) ORDER BY product_id DESC LIMIT 1`;
             let params = [pId || -1, colName, color, finish, size];
-            
+
             const invs = await db.select(query, params);
             if (invs && invs.length > 0) {
                 const inv = invs[0];
@@ -653,7 +762,7 @@ useEffect(() => {
                         newShowtileName = parts.slice(1).join(' ');
                     }
                 }
-                
+
                 setProductFormData(prev => ({
                     ...prev,
                     showtile_product_code: newShowtileCode || prev.showtile_product_code,
@@ -666,7 +775,7 @@ useEffect(() => {
             } else {
                 alert("No matching inventory records found.");
             }
-        } catch(e) {
+        } catch (e) {
             console.error(e);
             alert("Error fetching inventory data.");
         }
@@ -677,7 +786,7 @@ useEffect(() => {
             const db = await getDb();
             const newStatus = { ...currentStatus, [key]: checked };
             await db.execute("UPDATE products SET cht_and_gto_stock_status = $1 WHERE product_id = $2", [JSON.stringify(newStatus), productId]);
-            
+
             // Optimistic update
             setProducts(products.map(p => {
                 if (p.product_id === productId) {
@@ -703,7 +812,7 @@ useEffect(() => {
     return (
         <div className="page-content" style={{ padding: '24px', display: 'flex', flexDirection: 'column', height: '100%', boxSizing: 'border-box' }}>
             {/* Topbar */}
-            
+
             <div className="containers-subnav" style={{
                 display: 'flex',
                 gap: '16px',
@@ -719,177 +828,177 @@ useEffect(() => {
             </div>
 
             <div style={{ display: mainTab === 'list' ? 'flex' : 'none', flexDirection: 'column', flex: 1, overflow: 'hidden' }}>
-            <div className="topbar"
-     style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '24px', alignItems: 'center' }}>
-                <div className="search-bar" style={{ display: 'flex', alignItems: 'center', background: 'white', padding: '8px 16px', borderRadius: '24px', border: '1px solid #e2e8f0', width: '300px' }}>
-                    <Search size={18} style={{ color: '#94a3b8', marginRight: '8px' }} />
-                    <input 
-                        type="text" 
-                        placeholder="Search products..." 
-                        value={search} 
-                        onChange={(e) => setSearch(e.target.value)} 
-                        style={{ border: 'none', outline: 'none', background: 'transparent', width: '100%', fontSize: '0.9rem' }}
-                    />
-                </div>
-                <div style={{ display: 'flex', gap: '12px' }}>
-                    <button className="btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '8px 16px', borderRadius: '6px' }} onClick={() => {
-                        setCollectionFormData({ id: null, name: '', shipper_id: '' });
-                        setShowCollectionModal(true);
-                    }}>
-                        <Plus size={16} /> Add Collection
-                    </button>
-                    <button className="btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '8px 16px', borderRadius: '6px' }} onClick={handleAutoMatchGlobalCollections}>
-                        <Wand2 size={16} /> Auto Match Collection
-                    </button>
-                    <button className="btn-primary" style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '8px 16px', borderRadius: '6px' }} onClick={() => {
-                        setProductFormData(getInitialProductState());
-                        setColorInput('');
-                        setFinishInput('');
-                        setProductTab('info');
-                        setProductInventory([]);
-                        setShowProductModal(true);
-                        loadProductInventory(null, '', '', '', '');
-                    }}>
-                        <Plus size={16} /> Add Product
-                    </button>
-                </div>
-            </div>
-
-            {/* Main Area: Collections Accordion */}
-            <div style={{ flex: 1, overflowY: 'auto', background: 'white', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
-                {isLoading ? (
-                    <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: '200px' }}>
-                        <Loader2 className="animate-spin" size={32} style={{ color: '#3b82f6' }} />
+                <div className="topbar"
+                    style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '24px', alignItems: 'center' }}>
+                    <div className="search-bar" style={{ display: 'flex', alignItems: 'center', background: 'white', padding: '8px 16px', borderRadius: '24px', border: '1px solid #e2e8f0', width: '300px' }}>
+                        <Search size={18} style={{ color: '#94a3b8', marginRight: '8px' }} />
+                        <input
+                            type="text"
+                            placeholder="Search products..."
+                            value={search}
+                            onChange={(e) => setSearch(e.target.value)}
+                            style={{ border: 'none', outline: 'none', background: 'transparent', width: '100%', fontSize: '0.9rem' }}
+                        />
                     </div>
-                ) : (
-                    <>
-                        {collections.length === 0 && <div style={{ padding: '24px', textAlign: 'center', color: '#64748b' }}>No collections found.</div>}
-                        {collections.map(collection => {
-                    const collectionProducts = products.filter(p => p.collection_id === collection.collection_id).filter(p => {
-                        if (!search) return true;
-                        const term = search.toLowerCase();
-                        return (p.product_name || '').toLowerCase().includes(term) ||
-                               (p.color || '').toLowerCase().includes(term) ||
-                               (p.finish || '').toLowerCase().includes(term);
-                    });
+                    <div style={{ display: 'flex', gap: '12px' }}>
+                        <button className="btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '8px 16px', borderRadius: '6px' }} onClick={() => {
+                            setCollectionFormData({ id: null, name: '', shipper_id: '' });
+                            setShowCollectionModal(true);
+                        }}>
+                            <Plus size={16} /> Add Collection
+                        </button>
+                        <button className="btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '8px 16px', borderRadius: '6px' }} onClick={handleAutoMatchGlobalCollections}>
+                            <Wand2 size={16} /> Auto Match Collection
+                        </button>
+                        <button className="btn-primary" style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '8px 16px', borderRadius: '6px' }} onClick={() => {
+                            setProductFormData(getInitialProductState());
+                            setColorInput('');
+                            setFinishInput('');
+                            setProductTab('info');
+                            setProductInventory([]);
+                            setShowProductModal(true);
+                            loadProductInventory(null, '', '', '', '');
+                        }}>
+                            <Plus size={16} /> Add Product
+                        </button>
+                    </div>
+                </div>
 
-                    if (search && collectionProducts.length === 0) return null;
-
-                    const isExpanded = expandedCollections[collection.collection_id];
-
-                    return (
-                        <div key={collection.collection_id} style={{ borderBottom: '1px solid #e2e8f0' }}>
-                            <div 
-                                style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '16px 24px', cursor: 'pointer', background: isExpanded ? '#f8fafc' : 'white', transition: 'background 0.2s' }}
-                                onClick={() => toggleCollection(collection.collection_id)}
-                            >
-                                <div style={{ display: 'flex', alignItems: 'center' }}>
-                                    {isExpanded ? <ChevronDown size={18} style={{ marginRight: '12px', color: '#64748b' }} /> : <ChevronRight size={18} style={{ marginRight: '12px', color: '#64748b' }} />}
-                                    <h3 style={{ margin: 0, fontSize: '1.1rem', color: '#1e293b' }}>{collection.collection_name}</h3>
-                                </div>
-                                <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                                    <button className="btn-icon" title="Auto Match" onClick={(e) => handleAutoMatchCollection(e, collection)}>
-                                        <Wand2 size={18} />
-                                    </button>
-                                    <button className="btn-icon" title="Edit Collection" onClick={(e) => {
-                                        e.stopPropagation();
-                                        setCollectionFormData({ id: collection.collection_id, name: collection.collection_name, shipper_id: collection.shipper_id || '' });
-                                        setShowCollectionModal(true);
-                                    }}>
-                                        <Edit2 size={18} />
-                                    </button>
-                                    <button className="btn-icon" title="Delete Collection" style={{ color: '#ef4444' }} onClick={(e) => handleDeleteCollection(e, collection)}>
-                                        <Trash2 size={18} />
-                                    </button>
-                                </div>
-                            </div>
-
-                            {isExpanded && (
-                                <div style={{ padding: '0 24px 24px 24px' }}>
-                                    {collectionProducts.length === 0 ? (
-                                        <div style={{ padding: '16px', color: '#94a3b8', fontSize: '0.9rem', fontStyle: 'italic' }}>No products in this collection.</div>
-                                    ) : (
-                                        <table style={{ width: '100%', borderCollapse: 'collapse', marginTop: '8px' }}>
-                                            <thead>
-                                                <tr style={{ borderBottom: '2px solid #e2e8f0', textAlign: 'left' }}>
-                                                    <th style={{ padding: '12px 8px', color: '#64748b', fontWeight: 600, fontSize: '0.85rem' }}>Actions</th>
-                                                    <th style={{ padding: '12px 8px', color: '#64748b', fontWeight: 600, fontSize: '0.85rem' }}>Product Name</th>
-                                                    <th style={{ padding: '12px 8px', color: '#64748b', fontWeight: 600, fontSize: '0.85rem' }}>Colour</th>
-                                                    <th style={{ padding: '12px 8px', color: '#64748b', fontWeight: 600, fontSize: '0.85rem' }}>Finish</th>
-                                                    <th style={{ padding: '12px 8px', color: '#64748b', fontWeight: 600, fontSize: '0.85rem' }}>Size</th>
-                                                    <th style={{ padding: '12px 8px', color: '#64748b', fontWeight: 600, fontSize: '0.85rem' }}>CHT Price</th>
-                                                    <th style={{ padding: '12px 8px', color: '#64748b', fontWeight: 600, fontSize: '0.85rem' }}>GTO Price</th>
-                                                    <th style={{ padding: '12px 8px', color: '#64748b', fontWeight: 600, fontSize: '0.85rem' }}>Online Stock Status</th>
-                                                </tr>
-                                            </thead>
-                                            <tbody>
-                                                {collectionProducts.map(product => {
-                                                    let stockStatus = { force_in_stock: false, backorder: false };
-                                                    try {
-                                                        if (product.cht_and_gto_stock_status) {
-                                                            stockStatus = JSON.parse(product.cht_and_gto_stock_status);
-                                                        }
-                                                    } catch (e) {}
-
-                                                    return (
-                                                        <tr key={product.product_id} style={{ borderBottom: '1px solid #f1f5f9' }}>
-                                                            <td style={{ padding: '12px 8px' }}>
-                                                                <button className="btn-icon" onClick={(e) => {
-                                                                    e.stopPropagation();
-                                                                    setProductFormData({
-                                                                        id: product.product_id,
-                                                                        ...product
-                                                                    });
-                                                                    setColorInput(product.color || '');
-                                                                    setFinishInput(product.finish || '');
-                                                                    setProductTab('info');
-                                                                    setProductInventory([]);
-                                                                    setShowProductModal(true);
-                                                                    loadProductInventory(product.product_id, product.collection_id, product.color, product.finish, product.size);
-                                                                }}>
-                                                                    <Edit2 size={16} />
-                                                                </button>
-                                                            </td>
-                                                            <td style={{ padding: '12px 8px', fontSize: '0.9rem', color: '#1e293b' }}>{product.product_name}</td>
-                                                            <td style={{ padding: '12px 8px', fontSize: '0.9rem', color: '#475569' }}>{product.color}</td>
-                                                            <td style={{ padding: '12px 8px', fontSize: '0.9rem', color: '#475569' }}>{product.finish}</td>
-                                                            <td style={{ padding: '12px 8px', fontSize: '0.9rem', color: '#475569' }}>{product.size}</td>
-                                                            <td style={{ padding: '12px 8px', fontSize: '0.9rem', color: '#475569' }}>{formatPrice(product.cht_regular_price, product.cht_sales_price)}</td>
-                                                            <td style={{ padding: '12px 8px', fontSize: '0.9rem', color: '#475569' }}>{formatPrice(product.gto_regular_price, product.gto_sales_price)}</td>
-                                                            <td style={{ padding: '12px 8px', fontSize: '0.9rem', color: '#475569' }}>
-                                                                <div style={{ display: 'flex', gap: '16px' }}>
-                                                                    <label style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer' }}>
-                                                                        <input 
-                                                                            type="checkbox" 
-                                                                            checked={!!stockStatus.force_in_stock}
-                                                                            onChange={(e) => handleStockStatusChange(product.product_id, stockStatus, 'force_in_stock', e.target.checked)}
-                                                                        />
-                                                                        Force in Stock
-                                                                    </label>
-                                                                    <label style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer' }}>
-                                                                        <input 
-                                                                            type="checkbox" 
-                                                                            checked={!!stockStatus.backorder}
-                                                                            onChange={(e) => handleStockStatusChange(product.product_id, stockStatus, 'backorder', e.target.checked)}
-                                                                        />
-                                                                        Backorder
-                                                                    </label>
-                                                                </div>
-                                                            </td>
-                                                        </tr>
-                                                    );
-                                                })}
-                                            </tbody>
-                                        </table>
-                                    )}
-                                </div>
-                            )}
+                {/* Main Area: Collections Accordion */}
+                <div style={{ flex: 1, overflowY: 'auto', background: 'white', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
+                    {isLoading ? (
+                        <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: '200px' }}>
+                            <Loader2 className="animate-spin" size={32} style={{ color: '#3b82f6' }} />
                         </div>
-                    );
-                })}
-                    </>
-                )}
-            </div>
+                    ) : (
+                        <>
+                            {collections.length === 0 && <div style={{ padding: '24px', textAlign: 'center', color: '#64748b' }}>No collections found.</div>}
+                            {collections.map(collection => {
+                                const collectionProducts = products.filter(p => p.collection_id === collection.collection_id).filter(p => {
+                                    if (!search) return true;
+                                    const term = search.toLowerCase();
+                                    return (p.product_name || '').toLowerCase().includes(term) ||
+                                        (p.color || '').toLowerCase().includes(term) ||
+                                        (p.finish || '').toLowerCase().includes(term);
+                                });
+
+                                if (search && collectionProducts.length === 0) return null;
+
+                                const isExpanded = expandedCollections[collection.collection_id];
+
+                                return (
+                                    <div key={collection.collection_id} style={{ borderBottom: '1px solid #e2e8f0' }}>
+                                        <div
+                                            style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '16px 24px', cursor: 'pointer', background: isExpanded ? '#f8fafc' : 'white', transition: 'background 0.2s' }}
+                                            onClick={() => toggleCollection(collection.collection_id)}
+                                        >
+                                            <div style={{ display: 'flex', alignItems: 'center' }}>
+                                                {isExpanded ? <ChevronDown size={18} style={{ marginRight: '12px', color: '#64748b' }} /> : <ChevronRight size={18} style={{ marginRight: '12px', color: '#64748b' }} />}
+                                                <h3 style={{ margin: 0, fontSize: '1.1rem', color: '#1e293b' }}>{collection.collection_name}</h3>
+                                            </div>
+                                            <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                                                <button className="btn-icon" title="Auto Match" onClick={(e) => handleAutoMatchCollection(e, collection)}>
+                                                    <Wand2 size={18} />
+                                                </button>
+                                                <button className="btn-icon" title="Edit Collection" onClick={(e) => {
+                                                    e.stopPropagation();
+                                                    setCollectionFormData({ id: collection.collection_id, name: collection.collection_name, shipper_id: collection.shipper_id || '' });
+                                                    setShowCollectionModal(true);
+                                                }}>
+                                                    <Edit2 size={18} />
+                                                </button>
+                                                <button className="btn-icon" title="Delete Collection" style={{ color: '#ef4444' }} onClick={(e) => handleDeleteCollection(e, collection)}>
+                                                    <Trash2 size={18} />
+                                                </button>
+                                            </div>
+                                        </div>
+
+                                        {isExpanded && (
+                                            <div style={{ padding: '0 24px 24px 24px' }}>
+                                                {collectionProducts.length === 0 ? (
+                                                    <div style={{ padding: '16px', color: '#94a3b8', fontSize: '0.9rem', fontStyle: 'italic' }}>No products in this collection.</div>
+                                                ) : (
+                                                    <table style={{ width: '100%', borderCollapse: 'collapse', marginTop: '8px' }}>
+                                                        <thead>
+                                                            <tr style={{ borderBottom: '2px solid #e2e8f0', textAlign: 'left' }}>
+                                                                <th style={{ padding: '12px 8px', color: '#64748b', fontWeight: 600, fontSize: '0.85rem', width: '80px' }}>Actions</th>
+                                                                <th style={{ padding: '12px 8px', color: '#64748b', fontWeight: 600, fontSize: '0.85rem' }}>Product Name</th>
+                                                                <th style={{ padding: '12px 8px', color: '#64748b', fontWeight: 600, fontSize: '0.85rem', width: '150px' }}>Colour</th>
+                                                                <th style={{ padding: '12px 8px', color: '#64748b', fontWeight: 600, fontSize: '0.85rem', width: '150px' }}>Finish</th>
+                                                                <th style={{ padding: '12px 8px', color: '#64748b', fontWeight: 600, fontSize: '0.85rem', width: '150px' }}>Size</th>
+                                                                <th style={{ padding: '12px 8px', color: '#64748b', fontWeight: 600, fontSize: '0.85rem', width: '150px' }}>CHT Price</th>
+                                                                <th style={{ padding: '12px 8px', color: '#64748b', fontWeight: 600, fontSize: '0.85rem', width: '150px' }}>GTO Price</th>
+                                                                <th style={{ padding: '12px 8px', color: '#64748b', fontWeight: 600, fontSize: '0.85rem', width: '240px' }}>Online Stock Status</th>
+                                                            </tr>
+                                                        </thead>
+                                                        <tbody>
+                                                            {collectionProducts.map(product => {
+                                                                let stockStatus = { force_in_stock: false, backorder: false };
+                                                                try {
+                                                                    if (product.cht_and_gto_stock_status) {
+                                                                        stockStatus = JSON.parse(product.cht_and_gto_stock_status);
+                                                                    }
+                                                                } catch (e) { }
+
+                                                                return (
+                                                                    <tr key={product.product_id} style={{ borderBottom: '1px solid #f1f5f9' }}>
+                                                                        <td style={{ padding: '12px 8px' }}>
+                                                                            <button className="btn-icon" onClick={(e) => {
+                                                                                e.stopPropagation();
+                                                                                setProductFormData({
+                                                                                    id: product.product_id,
+                                                                                    ...product
+                                                                                });
+                                                                                setColorInput(product.color || '');
+                                                                                setFinishInput(product.finish || '');
+                                                                                setProductTab('info');
+                                                                                setProductInventory([]);
+                                                                                setShowProductModal(true);
+                                                                                loadProductInventory(product.product_id, product.collection_id, product.color, product.finish, product.size);
+                                                                            }}>
+                                                                                <Edit2 size={16} />
+                                                                            </button>
+                                                                        </td>
+                                                                        <td style={{ padding: '12px 8px', fontSize: '0.9rem', color: '#1e293b' }}>{product.product_name}</td>
+                                                                        <td style={{ padding: '12px 8px', fontSize: '0.9rem', color: '#475569' }}>{product.color}</td>
+                                                                        <td style={{ padding: '12px 8px', fontSize: '0.9rem', color: '#475569' }}>{product.finish}</td>
+                                                                        <td style={{ padding: '12px 8px', fontSize: '0.9rem', color: '#475569' }}>{product.size}</td>
+                                                                        <td style={{ padding: '12px 8px', fontSize: '0.9rem', color: '#475569' }}>{formatPrice(product.cht_regular_price, product.cht_sales_price)}</td>
+                                                                        <td style={{ padding: '12px 8px', fontSize: '0.9rem', color: '#475569' }}>{formatPrice(product.gto_regular_price, product.gto_sales_price)}</td>
+                                                                        <td style={{ padding: '12px 8px', fontSize: '0.9rem', color: '#475569' }}>
+                                                                            <div style={{ display: 'flex', gap: '16px' }}>
+                                                                                <label style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer' }}>
+                                                                                    <input
+                                                                                        type="checkbox"
+                                                                                        checked={!!stockStatus.force_in_stock}
+                                                                                        onChange={(e) => handleStockStatusChange(product.product_id, stockStatus, 'force_in_stock', e.target.checked)}
+                                                                                    />
+                                                                                    Force in Stock
+                                                                                </label>
+                                                                                <label style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer' }}>
+                                                                                    <input
+                                                                                        type="checkbox"
+                                                                                        checked={!!stockStatus.backorder}
+                                                                                        onChange={(e) => handleStockStatusChange(product.product_id, stockStatus, 'backorder', e.target.checked)}
+                                                                                    />
+                                                                                    Backorder
+                                                                                </label>
+                                                                            </div>
+                                                                        </td>
+                                                                    </tr>
+                                                                );
+                                                            })}
+                                                        </tbody>
+                                                    </table>
+                                                )}
+                                            </div>
+                                        )}
+                                    </div>
+                                );
+                            })}
+                        </>
+                    )}
+                </div>
 
 
             </div> {/* End list tab */}
@@ -903,7 +1012,7 @@ useEffect(() => {
             </div>
 
             {/* Collection Modal */}
-    
+
             {showCollectionModal && (
                 <div style={overlayStyle}>
                     <div style={{ ...contentStyle, width: '400px', maxHeight: '500px' }}>
@@ -914,20 +1023,20 @@ useEffect(() => {
                         <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
                             <div className="form-group" style={{ margin: 0 }}>
                                 <label style={{ display: 'block', marginBottom: '8px', fontWeight: 500, fontSize: '0.9rem', color: '#475569' }}>Collection Name</label>
-                                <input 
-                                    type="text" 
-                                    className="form-control" 
-                                    value={collectionFormData.name} 
-                                    onChange={e => setCollectionFormData({...collectionFormData, name: e.target.value})}
+                                <input
+                                    type="text"
+                                    className="form-control"
+                                    value={collectionFormData.name}
+                                    onChange={e => setCollectionFormData({ ...collectionFormData, name: e.target.value })}
                                     style={{ width: '100%', padding: '8px 12px', border: '1px solid #cbd5e1', borderRadius: '6px', fontSize: '0.95rem' }}
                                 />
                             </div>
                             <div className="form-group" style={{ margin: 0 }}>
                                 <label style={{ display: 'block', marginBottom: '8px', fontWeight: 500, fontSize: '0.9rem', color: '#475569' }}>Shipper</label>
-                                <select 
-                                    className="form-control" 
+                                <select
+                                    className="form-control"
                                     value={collectionFormData.shipper_id}
-                                    onChange={e => setCollectionFormData({...collectionFormData, shipper_id: e.target.value})}
+                                    onChange={e => setCollectionFormData({ ...collectionFormData, shipper_id: e.target.value })}
                                     style={{ width: '100%', padding: '8px 12px', border: '1px solid #cbd5e1', borderRadius: '6px', fontSize: '0.95rem' }}
                                 >
                                     <option value="">Select Shipper...</option>
@@ -951,14 +1060,14 @@ useEffect(() => {
                             <h2 style={{ margin: 0, fontSize: '1.25rem', color: '#0f172a' }}>{productFormData.id ? 'Edit Product' : 'Add Product'}</h2>
                             <button className="btn-icon" onClick={() => setShowProductModal(false)}><X size={20} /></button>
                         </div>
-                        
-                        
-                        
-                        {(()=>{
+
+
+
+                        {(() => {
                             const hasVariants = (colorInput || '').trim() !== '' && (finishInput || '').trim() !== '' && (productFormData.size || '').trim() !== '';
                             return (
                                 <div style={{ display: 'flex', gap: '24px', borderBottom: '1px solid #e2e8f0', marginBottom: '24px' }}>
-                                    <div 
+                                    <div
                                         style={{ paddingBottom: '12px', cursor: 'pointer', fontWeight: 500, color: productTab === 'info' ? '#3b82f6' : '#64748b', borderBottom: productTab === 'info' ? '2px solid #3b82f6' : 'none' }}
                                         onClick={() => setProductTab('info')}
                                     >
@@ -966,13 +1075,13 @@ useEffect(() => {
                                     </div>
                                     {hasVariants && (
                                         <>
-                                            <div 
+                                            <div
                                                 style={{ paddingBottom: '12px', cursor: 'pointer', fontWeight: 500, color: productTab === 'inventory' ? '#3b82f6' : '#64748b', borderBottom: productTab === 'inventory' ? '2px solid #3b82f6' : 'none' }}
                                                 onClick={() => setProductTab('inventory')}
                                             >
                                                 Inventory
                                             </div>
-                                            <div 
+                                            <div
                                                 style={{ paddingBottom: '12px', cursor: 'pointer', fontWeight: 500, color: productTab === 'backorder' ? '#3b82f6' : '#64748b', borderBottom: productTab === 'backorder' ? '2px solid #3b82f6' : 'none' }}
                                                 onClick={() => setProductTab('backorder')}
                                             >
@@ -995,18 +1104,18 @@ useEffect(() => {
                                         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
                                             <div className="form-group" style={{ margin: 0 }}>
                                                 <label style={{ display: 'block', marginBottom: '6px', fontSize: '0.85rem', color: '#475569' }}>Product Name</label>
-                                                <input type="text" className="form-control" value={productFormData.product_name} onChange={e => setProductFormData({...productFormData, product_name: e.target.value})} style={{ width: '100%', padding: '6px 10px', border: '1px solid #cbd5e1', borderRadius: '4px' }} />
+                                                <input type="text" className="form-control" value={productFormData.product_name} onChange={e => setProductFormData({ ...productFormData, product_name: e.target.value })} style={{ width: '100%', padding: '6px 10px', border: '1px solid #cbd5e1', borderRadius: '4px' }} />
                                             </div>
                                             <div className="form-group" style={{ margin: 0 }}>
                                                 <label style={{ display: 'block', marginBottom: '6px', fontSize: '0.85rem', color: '#475569' }}>Product Description</label>
-                                                <input type="text" className="form-control" value={productFormData.product_description} onChange={e => setProductFormData({...productFormData, product_description: e.target.value})} style={{ width: '100%', padding: '6px 10px', border: '1px solid #cbd5e1', borderRadius: '4px' }} />
+                                                <input type="text" className="form-control" value={productFormData.product_description} onChange={e => setProductFormData({ ...productFormData, product_description: e.target.value })} style={{ width: '100%', padding: '6px 10px', border: '1px solid #cbd5e1', borderRadius: '4px' }} />
                                             </div>
                                             <div className="form-group" style={{ margin: 0 }}>
                                                 <label style={{ display: 'block', marginBottom: '6px', fontSize: '0.85rem', color: '#475569' }}>Collection</label>
                                                 <select className="form-control" value={productFormData.collection_id} onChange={e => {
                                                     const cId = e.target.value;
                                                     const col = collections.find(c => c.collection_id.toString() === cId);
-                                                    setProductFormData({...productFormData, collection_id: cId, shipper_id: col ? col.shipper_id : productFormData.shipper_id});
+                                                    setProductFormData({ ...productFormData, collection_id: cId, shipper_id: col ? col.shipper_id : productFormData.shipper_id });
                                                 }} style={{ width: '100%', padding: '6px 10px', border: '1px solid #cbd5e1', borderRadius: '4px' }}>
                                                     <option value="">Select Collection...</option>
                                                     {collections.map(c => <option key={c.collection_id} value={c.collection_id}>{c.collection_name}</option>)}
@@ -1014,21 +1123,21 @@ useEffect(() => {
                                             </div>
                                             <div className="form-group" style={{ margin: 0 }}>
                                                 <label style={{ display: 'block', marginBottom: '6px', fontSize: '0.85rem', color: '#475569' }}>Shipper</label>
-                                                <select className="form-control" value={productFormData.shipper_id} onChange={e => setProductFormData({...productFormData, shipper_id: e.target.value})} style={{ width: '100%', padding: '6px 10px', border: '1px solid #cbd5e1', borderRadius: '4px' }}>
+                                                <select className="form-control" value={productFormData.shipper_id} onChange={e => setProductFormData({ ...productFormData, shipper_id: e.target.value })} style={{ width: '100%', padding: '6px 10px', border: '1px solid #cbd5e1', borderRadius: '4px' }}>
                                                     <option value="">Select Shipper...</option>
                                                     {shippers.map(s => <option key={s.shipper_id} value={s.shipper_id}>{s.shipper_name}</option>)}
                                                 </select>
                                             </div>
                                             <div className="form-group" style={{ margin: 0, position: 'relative' }}>
                                                 <label style={{ display: 'block', marginBottom: '6px', fontSize: '0.85rem', color: '#475569' }}>Colour</label>
-                                                <input 
-                                                    type="text" 
-                                                    className="form-control" 
-                                                    value={colorInput} 
+                                                <input
+                                                    type="text"
+                                                    className="form-control"
+                                                    value={colorInput}
                                                     onChange={e => { setColorInput(e.target.value); setShowColorSuggestions(true); }}
                                                     onFocus={() => setShowColorSuggestions(true)}
                                                     onBlur={() => setTimeout(() => setShowColorSuggestions(false), 200)}
-                                                    style={{ width: '100%', padding: '6px 10px', border: '1px solid #cbd5e1', borderRadius: '4px' }} 
+                                                    style={{ width: '100%', padding: '6px 10px', border: '1px solid #cbd5e1', borderRadius: '4px' }}
                                                 />
                                                 {showColorSuggestions && colorSuggestions.length > 0 && (
                                                     <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, background: 'white', border: '1px solid #e2e8f0', borderRadius: '4px', zIndex: 10, maxHeight: '150px', overflowY: 'auto', boxShadow: '0 4px 6px rgba(0,0,0,0.1)' }}>
@@ -1042,14 +1151,14 @@ useEffect(() => {
                                             </div>
                                             <div className="form-group" style={{ margin: 0, position: 'relative' }}>
                                                 <label style={{ display: 'block', marginBottom: '6px', fontSize: '0.85rem', color: '#475569' }}>Finish</label>
-                                                <input 
-                                                    type="text" 
-                                                    className="form-control" 
-                                                    value={finishInput} 
+                                                <input
+                                                    type="text"
+                                                    className="form-control"
+                                                    value={finishInput}
                                                     onChange={e => { setFinishInput(e.target.value); setShowFinishSuggestions(true); }}
                                                     onFocus={() => setShowFinishSuggestions(true)}
                                                     onBlur={() => setTimeout(() => setShowFinishSuggestions(false), 200)}
-                                                    style={{ width: '100%', padding: '6px 10px', border: '1px solid #cbd5e1', borderRadius: '4px' }} 
+                                                    style={{ width: '100%', padding: '6px 10px', border: '1px solid #cbd5e1', borderRadius: '4px' }}
                                                 />
                                                 {showFinishSuggestions && finishSuggestions.length > 0 && (
                                                     <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, background: 'white', border: '1px solid #e2e8f0', borderRadius: '4px', zIndex: 10, maxHeight: '150px', overflowY: 'auto', boxShadow: '0 4px 6px rgba(0,0,0,0.1)' }}>
@@ -1063,7 +1172,7 @@ useEffect(() => {
                                             </div>
                                             <div className="form-group" style={{ margin: 0 }}>
                                                 <label style={{ display: 'block', marginBottom: '6px', fontSize: '0.85rem', color: '#475569' }}>Size</label>
-                                                <input type="text" className="form-control" value={productFormData.size} onChange={e => setProductFormData({...productFormData, size: e.target.value})} style={{ width: '100%', padding: '6px 10px', border: '1px solid #cbd5e1', borderRadius: '4px' }} />
+                                                <input type="text" className="form-control" value={productFormData.size} onChange={e => setProductFormData({ ...productFormData, size: e.target.value })} style={{ width: '100%', padding: '6px 10px', border: '1px solid #cbd5e1', borderRadius: '4px' }} />
                                             </div>
                                         </div>
                                     </div>
@@ -1081,27 +1190,27 @@ useEffect(() => {
                                         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
                                             <div className="form-group" style={{ margin: 0 }}>
                                                 <label style={{ display: 'block', marginBottom: '6px', fontSize: '0.85rem', color: '#475569' }}>Showtile Name</label>
-                                                <input type="text" className="form-control" value={productFormData.showtile_name} onChange={e => setProductFormData({...productFormData, showtile_name: e.target.value})} style={{ width: '100%', padding: '6px 10px', border: '1px solid #cbd5e1', borderRadius: '4px' }} />
+                                                <input type="text" className="form-control" value={productFormData.showtile_name} onChange={e => setProductFormData({ ...productFormData, showtile_name: e.target.value })} style={{ width: '100%', padding: '6px 10px', border: '1px solid #cbd5e1', borderRadius: '4px' }} />
                                             </div>
                                             <div className="form-group" style={{ margin: 0 }}>
                                                 <label style={{ display: 'block', marginBottom: '6px', fontSize: '0.85rem', color: '#475569' }}>Showtile Product Code</label>
-                                                <input type="text" className="form-control" value={productFormData.showtile_product_code} onChange={e => setProductFormData({...productFormData, showtile_product_code: e.target.value})} style={{ width: '100%', padding: '6px 10px', border: '1px solid #cbd5e1', borderRadius: '4px' }} />
+                                                <input type="text" className="form-control" value={productFormData.showtile_product_code} onChange={e => setProductFormData({ ...productFormData, showtile_product_code: e.target.value })} style={{ width: '100%', padding: '6px 10px', border: '1px solid #cbd5e1', borderRadius: '4px' }} />
                                             </div>
                                             <div className="form-group" style={{ margin: 0 }}>
                                                 <label style={{ display: 'block', marginBottom: '6px', fontSize: '0.85rem', color: '#475569' }}>Showtile Price</label>
-                                                <input type="number" step="0.01" className="form-control" value={productFormData.showtile_price} onChange={e => setProductFormData({...productFormData, showtile_price: e.target.value})} style={{ width: '100%', padding: '6px 10px', border: '1px solid #cbd5e1', borderRadius: '4px' }} />
+                                                <input type="number" step="0.01" className="form-control" value={productFormData.showtile_price} onChange={e => setProductFormData({ ...productFormData, showtile_price: e.target.value })} style={{ width: '100%', padding: '6px 10px', border: '1px solid #cbd5e1', borderRadius: '4px' }} />
                                             </div>
                                             <div className="form-group" style={{ margin: 0 }}>
                                                 <label style={{ display: 'block', marginBottom: '6px', fontSize: '0.85rem', color: '#475569' }}>m2 / box</label>
-                                                <input type="number" step="0.01" className="form-control" value={productFormData.m2_per_box} onChange={e => setProductFormData({...productFormData, m2_per_box: e.target.value})} style={{ width: '100%', padding: '6px 10px', border: '1px solid #cbd5e1', borderRadius: '4px' }} />
+                                                <input type="number" step="0.01" className="form-control" value={productFormData.m2_per_box} onChange={e => setProductFormData({ ...productFormData, m2_per_box: e.target.value })} style={{ width: '100%', padding: '6px 10px', border: '1px solid #cbd5e1', borderRadius: '4px' }} />
                                             </div>
                                             <div className="form-group" style={{ margin: 0 }}>
                                                 <label style={{ display: 'block', marginBottom: '6px', fontSize: '0.85rem', color: '#475569' }}>pcs / box</label>
-                                                <input type="number" step="0.01" className="form-control" value={productFormData.pcs_per_box} onChange={e => setProductFormData({...productFormData, pcs_per_box: e.target.value})} style={{ width: '100%', padding: '6px 10px', border: '1px solid #cbd5e1', borderRadius: '4px' }} />
+                                                <input type="number" step="0.01" className="form-control" value={productFormData.pcs_per_box} onChange={e => setProductFormData({ ...productFormData, pcs_per_box: e.target.value })} style={{ width: '100%', padding: '6px 10px', border: '1px solid #cbd5e1', borderRadius: '4px' }} />
                                             </div>
                                             <div className="form-group" style={{ margin: 0 }}>
                                                 <label style={{ display: 'block', marginBottom: '6px', fontSize: '0.85rem', color: '#475569' }}>box / pallet</label>
-                                                <input type="number" step="0.01" className="form-control" value={productFormData.box_per_pallet} onChange={e => setProductFormData({...productFormData, box_per_pallet: e.target.value})} style={{ width: '100%', padding: '6px 10px', border: '1px solid #cbd5e1', borderRadius: '4px' }} />
+                                                <input type="number" step="0.01" className="form-control" value={productFormData.box_per_pallet} onChange={e => setProductFormData({ ...productFormData, box_per_pallet: e.target.value })} style={{ width: '100%', padding: '6px 10px', border: '1px solid #cbd5e1', borderRadius: '4px' }} />
                                             </div>
                                         </div>
                                     </div>
@@ -1112,17 +1221,17 @@ useEffect(() => {
                                         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
                                             <div className="form-group" style={{ margin: 0 }}>
                                                 <label style={{ display: 'block', marginBottom: '6px', fontSize: '0.85rem', color: '#475569' }}>CHT Name</label>
-                                                <input type="text" className="form-control" value={productFormData.cht_name} onChange={e => setProductFormData({...productFormData, cht_name: e.target.value})} style={{ width: '100%', padding: '6px 10px', border: '1px solid #cbd5e1', borderRadius: '4px' }} />
+                                                <input type="text" className="form-control" value={productFormData.cht_name} onChange={e => setProductFormData({ ...productFormData, cht_name: e.target.value })} style={{ width: '100%', padding: '6px 10px', border: '1px solid #cbd5e1', borderRadius: '4px' }} />
                                             </div>
                                             <div className="form-group" style={{ margin: 0 }}>
                                                 <label style={{ display: 'block', marginBottom: '6px', fontSize: '0.85rem', color: '#475569' }}>GTO Name</label>
-                                                <input type="text" className="form-control" value={productFormData.gto_name} onChange={e => setProductFormData({...productFormData, gto_name: e.target.value})} style={{ width: '100%', padding: '6px 10px', border: '1px solid #cbd5e1', borderRadius: '4px' }} />
+                                                <input type="text" className="form-control" value={productFormData.gto_name} onChange={e => setProductFormData({ ...productFormData, gto_name: e.target.value })} style={{ width: '100%', padding: '6px 10px', border: '1px solid #cbd5e1', borderRadius: '4px' }} />
                                             </div>
                                         </div>
                                     </div>
                                 </div>
                             )}
-                            
+
                             {productTab === 'inventory' && (
                                 <div>
                                     <table style={{ width: '100%', borderCollapse: 'collapse' }}>
