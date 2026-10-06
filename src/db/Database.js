@@ -325,8 +325,10 @@ const initializeTables = async (db) => {
 
     try {
         await db.execute('CREATE INDEX IF NOT EXISTS idx_sales_invoice_sku_search ON sales(invoice_no, sku)');
+        await db.execute('CREATE INDEX IF NOT EXISTS idx_inventory_parent_id ON inventory(product_parent_id)');
+        await db.execute('CREATE INDEX IF NOT EXISTS idx_inventory_extracted_features ON inventory(extracted_name, extracted_colour, extracted_finish, extracted_size)');
     } catch (e) {
-        console.warn("Could not create index on sales.", e);
+        console.warn("Could not create index on sales/inventory.", e);
     }
 
     await db.execute(`

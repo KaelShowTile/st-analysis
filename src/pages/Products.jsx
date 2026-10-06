@@ -246,7 +246,7 @@ export default function Products() {
                         [colName, color, finish, size]
                     );
                     if (matchingRows && matchingRows.length > 0) {
-                        const ids = matchingRows.map(r => "'" + r.product_id + "'").join(',');
+                        const ids = matchingRows.map(r => r.product_id).join(',');
                         await db.execute(`UPDATE inventory SET product_parent_id = ? WHERE product_id IN (${ids})`, [newId]);
                     }
                     createdCount++;
