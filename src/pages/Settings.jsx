@@ -30,6 +30,9 @@ export default function Settings({ currentUser }) {
     const [chtEndpoint, setChtEndpoint] = useState('');
     const [chtKey, setChtKey] = useState('');
     const [chtFeed, setChtFeed] = useState('');
+    const [stEndpoint, setStEndpoint] = useState('');
+    const [stKey, setStKey] = useState('');
+    const [stFeed, setStFeed] = useState('');
 
     const [gtoEndpoint, setGtoEndpoint] = useState('');
     const [gtoKey, setGtoKey] = useState('');
@@ -83,6 +86,10 @@ export default function Settings({ currentUser }) {
         setChtEndpoint(await store.get('cht_endpoint') || '');
         setChtKey(await store.get('cht_key') || '');
         setChtFeed(await store.get('cht_feed') || '');
+
+        setStEndpoint(await store.get('st_endpoint') || '');
+        setStKey(await store.get('st_key') || '');
+        setStFeed(await store.get('st_feed') || '');
 
         setGtoEndpoint(await store.get('gto_endpoint') || '');
         setGtoKey(await store.get('gto_key') || '');
@@ -143,15 +150,18 @@ export default function Settings({ currentUser }) {
             await store.set('cht_endpoint', chtEndpoint);
             await store.set('cht_key', chtKey);
             await store.set('cht_feed', chtFeed);
+            await store.set('st_endpoint', stEndpoint);
+            await store.set('st_key', stKey);
+            await store.set('st_feed', stFeed);
             
             await store.set('gto_endpoint', gtoEndpoint);
             await store.set('gto_key', gtoKey);
             await store.set('gto_feed', gtoFeed);
 
             await store.save();
-            alert("WooCommerce API settings saved successfully.");
+            alert("Website API settings saved successfully.");
         } catch (e) {
-            console.error("Failed to save WooCommerce settings:", e);
+            console.error("Failed to save Website settings:", e);
             alert("Failed to save configuration.");
         }
     };
@@ -563,12 +573,28 @@ export default function Settings({ currentUser }) {
             <div className="settings-card" style={{ marginTop: '24px' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '16px' }}>
                     <div>
-                        <h3 style={{ margin: '0 0 4px 0' }}>WooCommerce API Sync</h3>
-                        <p className="subtitle" style={{ margin: 0 }}>Configure API keys and feeds for CHT and GTO websites.</p>
+                        <h3 style={{ margin: '0 0 4px 0' }}>Website API Sync</h3>
+                        <p className="subtitle" style={{ margin: 0 }}>Configure API keys and feeds for ST, CHT and GTO websites.</p>
                     </div>
                 </div>
 
                 <div style={{ display: 'flex', gap: '24px' }}>
+                                        {/* ST Settings */}
+                    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '12px', background: 'var(--surface-color)', padding: '16px', borderRadius: '6px', border: '1px solid var(--border-color)' }}>
+                        <h4 style={{ margin: '0 0 8px 0', borderBottom: '1px solid #e2e8f0', paddingBottom: '8px' }}>ST Website</h4>
+                        <div>
+                            <label className="form-label" style={{ fontWeight: 'bold' }}>Endpoint URL</label>
+                            <input type="text" className="form-input" value={stEndpoint} onChange={e => setStEndpoint(e.target.value)} placeholder="https://st.example.com/wp-json/st/v1" />
+                        </div>
+                        <div>
+                            <label className="form-label" style={{ fontWeight: 'bold' }}>API Key</label>
+                            <input type="text" className="form-input" value={stKey} onChange={e => setStKey(e.target.value)} placeholder="API Key" />
+                        </div>
+                        <div>
+                            <label className="form-label" style={{ fontWeight: 'bold' }}>Product Feed URL</label>
+                            <input type="text" className="form-input" value={stFeed} onChange={e => setStFeed(e.target.value)} placeholder="https://st.example.com/feed.json" />
+                        </div>
+                    </div>
                     {/* CHT Settings */}
                     <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '12px', background: 'var(--surface-color)', padding: '16px', borderRadius: '6px', border: '1px solid var(--border-color)' }}>
                         <h4 style={{ margin: '0 0 8px 0', borderBottom: '1px solid #e2e8f0', paddingBottom: '8px' }}>CHT Website</h4>

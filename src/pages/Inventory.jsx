@@ -44,6 +44,14 @@ export default function Inventory({ currentUser }) {
             const db = await getDb();
             const attributes = await db.select('SELECT * FROM attributes');
 
+            const allInventory = await db.select('SELECT * FROM inventory');
+            const inventoryMap = new Map();
+            for (const item of allInventory) {
+                if (item.sku) {
+                    inventoryMap.set(String(item.sku).trim(), item);
+                }
+            }
+
             const colours = attributes.filter(a => a.type === 'colour').map(a => a.value.toLowerCase());
             const finishes = attributes.filter(a => a.type === 'finish').map(a => a.value.toLowerCase());
 
@@ -54,8 +62,11 @@ export default function Inventory({ currentUser }) {
                     return isNaN(num) ? 0 : num;
                 };
 
-                for (const row of parsedData) {
-                    if (!row['SKU'] || row['SKU'].trim() === '') continue; // skip invalid rows
+                const chunkSize = 20;
+                for (let i = 0; i < parsedData.length; i += chunkSize) {
+                    const chunk = parsedData.slice(i, i + chunkSize);
+                    for (const row of chunk) {
+                        if (!row['SKU'] || row['SKU'].trim() === '') continue; // skip invalid rows
 
                     const salesDesc = String(row['Sales Description'] || '');
 
@@ -182,6 +193,49 @@ export default function Inventory({ currentUser }) {
                         }
                     }
 
+                    const existing = inventoryMap.get(sku);
+                    let shouldUpdate = false;
+                    
+                    if (!existing) {
+                        shouldUpdate = true;
+                    } else {
+                        const finalDays = days !== '' ? days : (existing.days || '');
+                        if (
+                            String(existing.stock_no || '') !== stock_no ||
+                            String(existing.sales_description || '') !== sales_desc ||
+                            String(existing.supplier || '') !== supplier ||
+                            Number(existing.available || 0) !== available ||
+                            Number(existing.holding || 0) !== holding ||
+                            Number(existing.so_qty || 0) !== so_qty ||
+                            Number(existing.total_qty || 0) !== total_qty ||
+                            Number(existing.rrp || 0) !== rrp ||
+                            Number(existing.cost || 0) !== cost ||
+                            String(existing.online_name || '') !== online_name ||
+                            String(existing.showtile_name || '') !== showtile ||
+                            Number(existing.pallet_qty || 0) !== pallet_qty ||
+                            Number(existing.box_qty || 0) !== box_qty ||
+                            Number(existing.piece_qty || 0) !== piece_qty ||
+                            Number(existing.m2_per_box || 0) !== m2_per_box ||
+                            Number(existing.pcs_per_box || 0) !== pcs_per_box ||
+                            Number(existing.box_per_pallet || 0) !== box_per_pallet ||
+                            String(existing.stk || '') !== stk ||
+                            String(existing.days || '') !== finalDays ||
+                            String(existing.x_inactive || '') !== x_inactive ||
+                            String(existing.batch || '') !== batch ||
+                            String(existing.location || '') !== location ||
+                            String(existing.extracted_name || '') !== extractedName ||
+                            String(existing.extracted_finish || '') !== extractedFinish ||
+                            String(existing.extracted_size || '') !== extractedSize ||
+                            String(existing.extracted_colour || '') !== extractedColour ||
+                            Number(existing.backorder || 0) !== backorder ||
+                            Number(existing.backorder_amount || 0) !== backorder_amount
+                        ) {
+                            shouldUpdate = true;
+                        }
+                    }
+
+                    if (!shouldUpdate) return;
+
                     // Upsert logic
                     await db.execute(`
                         INSERT INTO inventory (
@@ -202,6 +256,7 @@ export default function Inventory({ currentUser }) {
                             x_inactive=excluded.x_inactive, batch=excluded.batch, 
                             location=excluded.location, backorder=excluded.backorder, backorder_amount=excluded.backorder_amount
                     `, [sku, stock_no, sales_desc, supplier, available, holding, so_qty, total_qty, rrp, cost, online_name, showtile, pallet_qty, box_qty, piece_qty, m2_per_box, pcs_per_box, box_per_pallet, stk, days, x_inactive, batch, location, extractedName, extractedFinish, extractedSize, extractedColour, backorder, backorder_amount]);
+                    }
                 }
             } catch (innerErr) {
                 console.error("Data processing failed", innerErr);

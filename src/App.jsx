@@ -104,13 +104,18 @@ function App() {
             const store = await load('settings.json', { autoSave: false });
             const chtUrl = await store.get('cht_feed');
             const gtoUrl = await store.get('gto_feed');
+            const stUrl = await store.get('st_feed');
             
-            window.productFeeds = { cht: [], gto: [] };
+            window.productFeeds = { cht: [], gto: [], st: [] };
 
             const fetchFeed = async (url) => {
               if (!url) return [];
               try {
                 const res = await tauriFetch(url);
+                if (!res.ok) {
+                  console.error("HTTP error when fetching feed:", res.status, url);
+                  return [];
+                }
                 const data = await res.json();
                 return data.map(item => {
                   const match = item.name?.match(/(.+)\s*\(Code:(.+)\)/i);
@@ -128,8 +133,28 @@ function App() {
               }
             };
 
+            const fetchStFeed = async (url) => {
+              if (!url) return [];
+              try {
+                const res = await tauriFetch(url);
+                if (!res.ok) {
+                  console.error("HTTP error when fetching ST feed:", res.status, url);
+                  return [];
+                }
+                const data = await res.json();
+                if (data && data.posts) {
+                    return data.posts;
+                }
+                return [];
+              } catch (e) {
+                console.error("Failed to fetch ST feed", url, e);
+                return [];
+              }
+            };
+
             window.productFeeds.cht = await fetchFeed(chtUrl);
             window.productFeeds.gto = await fetchFeed(gtoUrl);
+            window.productFeeds.st = await fetchStFeed(stUrl);
           } catch(e) { console.error("Error loading product feeds:", e); }
         };
         fetchProductFeeds();

@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Search, Plus, Edit2, Edit3, X, ChevronDown, ChevronRight, Package, Save, Wand2, Trash2, Loader2 } from 'lucide-react';
+import { confirm } from '@tauri-apps/plugin-dialog';
 import { getDb } from '../db/Database';
 import './Inventory.css';
 
@@ -40,12 +41,51 @@ export default function Products() {
     const [showProductModal, setShowProductModal] = useState(false);
     const [editingProduct, setEditingProduct] = useState(null);
 
+    const [isAutoMatchingGlobal, setIsAutoMatchingGlobal] = useState(false);
+    const [isAutoMatchingCollection, setIsAutoMatchingCollection] = useState(null);
+
+    const toggleCollection = (id) => {
+        setExpandedCollections(prev => ({ ...prev, [id]: !prev[id] }));
+    };
+
+    const handleDeleteCollection = async (e, collection) => {
+        e.stopPropagation();
+        if (!(await confirm(`Are you sure you want to delete collection "${collection.collection_name}"? This will also remove the collection association from all its products.`))) {
+            return;
+        }
+        try {
+            const db = await getDb();
+            await db.execute("UPDATE products SET collection_id = NULL WHERE collection_id = $1", [collection.collection_id]);
+            await db.execute("DELETE FROM collections WHERE collection_id = $1", [collection.collection_id]);
+            loadData();
+        } catch (err) {
+            console.error(err);
+            alert("Failed to delete collection.");
+        }
+    };
+
+    const handleDeleteProduct = async (e, product) => {
+        e.stopPropagation();
+        if (!(await confirm(`Are you sure you want to delete product "${product.product_name}"?`))) {
+            return;
+        }
+        try {
+            const db = await getDb();
+            await db.execute("UPDATE inventory SET product_parent_id = NULL WHERE product_parent_id = $1", [product.product_id]);
+            await db.execute("DELETE FROM products WHERE product_id = $1", [product.product_id]);
+            loadData();
+        } catch (err) {
+            console.error(err);
+            alert("Failed to delete product.");
+        }
+    };
+
     useEffect(() => {
-        loadData();
+        loadData(true);
     }, []);
 
-    const loadData = async () => {
-        setIsLoading(true);
+    const loadData = async (isInitial = false) => {
+        if (isInitial) setIsLoading(true);
         try {
             const db = await getDb();
             const cols = await db.select("SELECT * FROM collections ORDER BY collection_name");
@@ -58,20 +98,27 @@ export default function Products() {
             setShippers(shps);
             setAttributes(attrs);
 
-            // Expand all by default
-            const expanded = {};
-            cols.forEach(c => expanded[c.collection_id] = true);
-            setExpandedCollections(expanded);
+            // Expand new collections by default, preserve existing states
+            setExpandedCollections(prev => {
+                const newExpanded = { ...prev };
+                cols.forEach(c => {
+                    if (newExpanded[c.collection_id] === undefined) {
+                        newExpanded[c.collection_id] = true;
+                    }
+                });
+                return newExpanded;
+            });
         } catch (e) {
             console.error("Failed to load products data:", e);
         } finally {
-            setIsLoading(false);
+            if (isInitial) setIsLoading(false);
         }
     };
 
 
     const handleAutoMatchGlobalCollections = async () => {
-        if (!confirm('Scan inventory and create collections for unique extracted names?')) return;
+        if (!(await confirm('Scan inventory and create collections for unique extracted names?'))) return;
+        setIsAutoMatchingGlobal(true);
         try {
             const db = await getDb();
             const invs = await db.select("SELECT DISTINCT extracted_name FROM inventory WHERE (x_inactive IS NULL OR x_inactive != 1) AND extracted_name IS NOT NULL AND extracted_name != ''");
@@ -87,7 +134,12 @@ export default function Products() {
             }
             alert(`Auto match complete. Created ${count} new collections.`);
             loadData();
-        } catch (e) { console.error(e); alert('Error'); }
+        } catch (e) {
+            console.error(e);
+            alert('Error');
+        } finally {
+            setIsAutoMatchingGlobal(false);
+        }
     };
 
     const handleSaveCollection = async () => {
@@ -113,7 +165,8 @@ export default function Products() {
 
     const handleAutoMatchCollection = async (e, collection) => {
         e.stopPropagation();
-        if (!confirm(`Are you sure you want to auto match products for collection "${collection.collection_name}"?`)) return;
+        if (!(await confirm(`Are you sure you want to auto match products for collection "${collection.collection_name}"?`))) return;
+        setIsAutoMatchingCollection(collection.collection_id);
         try {
             const db = await getDb();
             const colName = collection.collection_name;
@@ -209,6 +262,8 @@ export default function Products() {
         } catch (e) {
             console.error(e);
             alert("Error during auto match.");
+        } finally {
+            setIsAutoMatchingCollection(null);
         }
     };
 
@@ -320,7 +375,7 @@ export default function Products() {
                             <Plus size={16} /> Add Collection
                         </button>
                         <button className="btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '8px 16px', borderRadius: '6px' }} onClick={handleAutoMatchGlobalCollections}>
-                            <Wand2 size={16} /> Auto Match Collection
+                            {isAutoMatchingGlobal ? <Loader2 size={16} className="animate-spin" /> : <Wand2 size={16} />} Auto Match Collection
                         </button>
                         <button className="btn-primary" style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '8px 16px', borderRadius: '6px' }} onClick={() => {
                             setEditingProduct(null); setShowProductModal(true);
@@ -364,7 +419,7 @@ export default function Products() {
                                             </div>
                                             <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
                                                 <button className="btn-icon" title="Auto Match" onClick={(e) => handleAutoMatchCollection(e, collection)}>
-                                                    <Wand2 size={18} />
+                                                    {isAutoMatchingCollection === collection.collection_id ? <Loader2 size={18} className="animate-spin" /> : <Wand2 size={18} />}
                                                 </button>
                                                 <button className="btn-icon" title="Edit Collection" onClick={(e) => {
                                                     e.stopPropagation();
@@ -408,12 +463,15 @@ export default function Products() {
 
                                                                 return (
                                                                     <tr key={product.product_id} style={{ borderBottom: '1px solid #f1f5f9' }}>
-                                                                        <td style={{ padding: '12px 8px' }}>
-                                                                            <button className="btn-icon" onClick={(e) => {
+                                                                        <td style={{ padding: '12px 8px', display: 'flex' }}>
+                                                                            <button className="btn-icon" title="Edit Product" onClick={(e) => {
                                                                                 e.stopPropagation();
                                                                                 setEditingProduct(product); setShowProductModal(true);
                                                                             }}>
                                                                                 <Edit2 size={16} />
+                                                                            </button>
+                                                                            <button className="btn-icon" title="Delete Product" style={{ color: '#ef4444' }} onClick={(e) => handleDeleteProduct(e, product)}>
+                                                                                <Trash2 size={16} />
                                                                             </button>
                                                                         </td>
                                                                         <td style={{ padding: '12px 8px', fontSize: '0.9rem', color: '#1e293b' }}>{product.product_name}</td>
@@ -510,13 +568,13 @@ export default function Products() {
             )}
 
             {/* Product Modal */}
-            <ProductModal 
-                isOpen={showProductModal} 
+            <ProductModal
+                isOpen={showProductModal}
                 onClose={() => setShowProductModal(false)}
-                product={editingProduct} 
-                collections={collections} 
-                shippers={shippers} 
-                attributes={attributes} 
+                product={editingProduct}
+                collections={collections}
+                shippers={shippers}
+                attributes={attributes}
                 onSaveSuccess={() => {
                     setShowProductModal(false);
                     loadData();

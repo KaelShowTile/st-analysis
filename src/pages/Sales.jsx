@@ -34,8 +34,13 @@ export default function Sales({ currentUser }) {
         try {
             const db = await getDb();
             
-            const existingRecords = await db.select('SELECT DISTINCT invoice_no, sku FROM sales');
-            const existingPairs = new Set(existingRecords.map(r => r.invoice_no + '|' + r.sku));
+            const allSales = await db.select('SELECT * FROM sales');
+            const salesMap = new Map();
+            for (const item of allSales) {
+                if (item.invoice_no && item.sku) {
+                    salesMap.set(String(item.invoice_no).trim() + '|' + String(item.sku).trim(), item);
+                }
+            }
 
             const parseNumber = (val) => {
                 if (!val) return 0;
@@ -50,26 +55,43 @@ export default function Sales({ currentUser }) {
                 const time = String(row['Time'] || '');
                 const sales_person = String(row['Sales Person'] || '');
                 const customer = String(row['Customer'] || '');
-                const invoice_no = String(row['Invoice No'] || '');
+                const invoice_no = String(row['Invoice No'] || '').trim();
                 const sku = String(row['SKU']).trim();
-
-                const key = invoice_no + '|' + sku;
-                if (existingPairs.has(key)) {
-                    continue; // Skip because it was already uploaded in a previous session
-                }
-
                 const description = String(row['Description'] || '');
                 const qty = parseNumber(row['Qty']);
                 const total_ex_tax = parseNumber(row['Total (Ex Tax)']);
                 const cost_ex_tax = parseNumber(row['Cost (Ex Tax)']);
 
-                await db.execute(`
-                    INSERT INTO sales (
-                        date, time, sales_person, customer, invoice_no, sku, description, qty, total_ex_tax, cost_ex_tax
-                    ) VALUES (
-                        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10
-                    )
-                `, [date, time, sales_person, customer, invoice_no, sku, description, qty, total_ex_tax, cost_ex_tax]);
+                const key = invoice_no + '|' + sku;
+                const existing = salesMap.get(key);
+
+                if (existing) {
+                    if (
+                        String(existing.date || '') !== date ||
+                        String(existing.time || '') !== time ||
+                        String(existing.sales_person || '') !== sales_person ||
+                        String(existing.customer || '') !== customer ||
+                        String(existing.description || '') !== description ||
+                        Number(existing.qty || 0) !== qty ||
+                        Number(existing.total_ex_tax || 0) !== total_ex_tax ||
+                        Number(existing.cost_ex_tax || 0) !== cost_ex_tax
+                    ) {
+                        await db.execute(`
+                            UPDATE sales SET 
+                                date = $1, time = $2, sales_person = $3, customer = $4, 
+                                description = $5, qty = $6, total_ex_tax = $7, cost_ex_tax = $8
+                            WHERE invoice_no = $9 AND sku = $10
+                        `, [date, time, sales_person, customer, description, qty, total_ex_tax, cost_ex_tax, invoice_no, sku]);
+                    }
+                } else {
+                    await db.execute(`
+                        INSERT INTO sales (
+                            date, time, sales_person, customer, invoice_no, sku, description, qty, total_ex_tax, cost_ex_tax
+                        ) VALUES (
+                            $1, $2, $3, $4, $5, $6, $7, $8, $9, $10
+                        )
+                    `, [date, time, sales_person, customer, invoice_no, sku, description, qty, total_ex_tax, cost_ex_tax]);
+                }
             }
             loadData();
         } catch (err) {
