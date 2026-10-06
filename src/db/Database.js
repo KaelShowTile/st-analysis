@@ -324,9 +324,9 @@ const initializeTables = async (db) => {
     `);
 
     try {
-        await db.execute('DROP INDEX IF EXISTS idx_sales_invoice_sku');
+        await db.execute('CREATE INDEX IF NOT EXISTS idx_sales_invoice_sku_search ON sales(invoice_no, sku)');
     } catch (e) {
-        console.warn("Could not drop unique index on sales.", e);
+        console.warn("Could not create index on sales.", e);
     }
 
     await db.execute(`
