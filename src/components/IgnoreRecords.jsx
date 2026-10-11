@@ -102,8 +102,8 @@ function IgnoreRecords() {
                                 <th style={{ width: '100px' }}>SKU</th>
                                 <th>Description</th>
                                 <th style={{ width: '250px' }}>Extracted Name</th>
-                                <th style={{ width: '100px' }}>Finish</th>
                                 <th style={{ width: '100px' }}>Colour</th>
+                                <th style={{ width: '100px' }}>Finish</th>
                                 <th style={{ width: '100px' }}>Size</th>
                                 <th>Matched Product</th>
                                 <th style={{ textAlign: 'center', width: '150px' }}>Actions</th>
@@ -126,11 +126,11 @@ function IgnoreRecords() {
                                         <td className="editable-cell product-name" title="Click to edit" onClick={() => setEditModal({ show: true, item: r, field: 'extracted_name', val: eName, options: [] })}>
                                             {eName} <Edit3 size={12} className="edit-icon" />
                                         </td>
-                                        <td className="editable-cell" title="Click to edit" onClick={() => setEditModal({ show: true, item: r, field: 'extracted_finish', val: eFinish, options: attributes.finishes })}>
-                                            {eFinish && <span className="param-badge finish">{eFinish}</span>} <Edit3 size={12} className="edit-icon" />
-                                        </td>
                                         <td className="editable-cell" title="Click to edit" onClick={() => setEditModal({ show: true, item: r, field: 'extracted_colour', val: eColour, options: attributes.colours })}>
                                             {eColour && <span className="param-badge colour">{eColour}</span>} <Edit3 size={12} className="edit-icon" />
+                                        </td>
+                                        <td className="editable-cell" title="Click to edit" onClick={() => setEditModal({ show: true, item: r, field: 'extracted_finish', val: eFinish, options: attributes.finishes })}>
+                                            {eFinish && <span className="param-badge finish">{eFinish}</span>} <Edit3 size={12} className="edit-icon" />
                                         </td>
                                         <td className="editable-cell" title="Click to edit" onClick={() => setEditModal({ show: true, item: r, field: 'extracted_size', val: eSize, options: [] })}>
                                             {eSize && <span className="param-badge size">{eSize}</span>} <Edit3 size={12} className="edit-icon" />

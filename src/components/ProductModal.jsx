@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { X } from 'lucide-react';
 import { getDb } from '../db/Database';
 import { load } from '@tauri-apps/plugin-store';
+import { fetch as tauriFetch } from '@tauri-apps/plugin-http';
 
 const overlayStyle = {
     position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
@@ -29,7 +30,11 @@ function getInitialProductState() {
         showtile_product_code: '',
         showtile_price: '',
         cht_name: '',
+        cht_regular_price: '',
+        cht_sales_price: '',
         gto_name: '',
+        gto_regular_price: '',
+        gto_sales_price: '',
         st_id: '',
         st_name: ''
     };
@@ -112,6 +117,62 @@ export default function ProductModal({
         }
     };
 
+    const handleUpdatePriceOnline = async () => {
+        try {
+            if (!productFormData.st_id) {
+                alert("This product does not have an ST ID mapped.");
+                return;
+            }
+            if (!productFormData.finish || !productFormData.size || !productFormData.showtile_price) {
+                alert("Missing finish, size, or showtile_price to update online.");
+                return;
+            }
+
+            const store = await load('settings.json', { autoSave: false });
+            const stEndpoint = await store.get('st_endpoint');
+            const stKey = await store.get('st_key');
+
+            if (!stEndpoint || !stKey) {
+                alert("Please configure ST Endpoint and Key in Settings first.");
+                return;
+            }
+
+            const payload = {
+                updates: [
+                    {
+                        product_id: productFormData.st_id.toString(),
+                        finish: productFormData.finish,
+                        size: productFormData.size,
+                        price: productFormData.showtile_price.toString()
+                    }
+                ]
+            };
+
+            const res = await tauriFetch(stEndpoint, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'x-api-key': stKey
+                },
+                body: JSON.stringify(payload)
+            });
+
+            if (res.ok) {
+                const data = await res.json();
+                if (data.results && data.results[0] && data.results[0].status === 'success') {
+                    alert("Price updated online successfully.");
+                } else {
+                    alert("Failed to update price online: " + (data.results?.[0]?.message || 'Unknown error'));
+                }
+            } else {
+                alert("Failed to update price online. HTTP status: " + res.status);
+            }
+        } catch (err) {
+            console.error("Failed to update online price", err);
+            alert("Error connecting to online API.");
+        }
+    };
+
     const handleAutoFillShowtile = async () => {
         try {
             const db = await getDb();
@@ -167,14 +228,14 @@ export default function ProductModal({
                         product_name = $1, product_description = $2, collection_id = $3, shipper_id = $4,
                         color = $5, finish = $6, size = $7, m2_per_box = $8, pcs_per_box = $9, box_per_pallet = $10,
                         showtile_name = $11, showtile_product_code = $12, showtile_price = $13,
-                        cht_name = $14, gto_name = $15, st_id = $16, st_name = $17
-                    WHERE product_id = $18
+                        cht_name = $14, cht_regular_price = $15, cht_sales_price = $16, gto_name = $17, gto_regular_price = $18, gto_sales_price = $19, st_id = $20, st_name = $21
+                    WHERE product_id = $22
                 `, [
                     productFormData.product_name, productFormData.product_description, productFormData.collection_id, productFormData.shipper_id || null,
                     finalColor, finalFinish, productFormData.size,
                     productFormData.m2_per_box || null, productFormData.pcs_per_box || null, productFormData.box_per_pallet || null,
                     productFormData.showtile_name, productFormData.showtile_product_code, productFormData.showtile_price || null,
-                    productFormData.cht_name, productFormData.gto_name,
+                    productFormData.cht_name, productFormData.cht_regular_price || null, productFormData.cht_sales_price || null, productFormData.gto_name, productFormData.gto_regular_price || null, productFormData.gto_sales_price || null,
                     productFormData.st_id, productFormData.st_name,
                     productFormData.id
                 ]);
@@ -184,14 +245,14 @@ export default function ProductModal({
                         product_name, product_description, collection_id, shipper_id,
                         color, finish, size, m2_per_box, pcs_per_box, box_per_pallet,
                         showtile_name, showtile_product_code, showtile_price,
-                        cht_name, gto_name, st_id, st_name
-                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+                        cht_name, cht_regular_price, cht_sales_price, gto_name, gto_regular_price, gto_sales_price, st_id, st_name
+                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)
                 `, [
                     productFormData.product_name, productFormData.product_description, productFormData.collection_id, productFormData.shipper_id || null,
                     finalColor, finalFinish, productFormData.size,
                     productFormData.m2_per_box || null, productFormData.pcs_per_box || null, productFormData.box_per_pallet || null,
                     productFormData.showtile_name, productFormData.showtile_product_code, productFormData.showtile_price || null,
-                    productFormData.cht_name, productFormData.gto_name,
+                    productFormData.cht_name, productFormData.cht_regular_price || null, productFormData.cht_sales_price || null, productFormData.gto_name, productFormData.gto_regular_price || null, productFormData.gto_sales_price || null,
                     productFormData.st_id, productFormData.st_name
                 ]);
             }
@@ -352,7 +413,10 @@ export default function ProductModal({
                             <div style={{ background: '#f8fafc', padding: '20px', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
                                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
                                     <h3 style={{ margin: 0, fontSize: '1rem', color: '#0f172a' }}>Showtile Specifics</h3>
-                                    <button className="btn-secondary" onClick={handleAutoFillShowtile} style={{ padding: '4px 8px', fontSize: '0.8rem' }}>Auto Fill from Inventory</button>
+                                    <div style={{ display: 'flex', gap: '10px' }}>
+                                        <button className="btn-secondary" onClick={handleUpdatePriceOnline} style={{ padding: '4px 8px', fontSize: '0.8rem', background: '#3b82f6', color: 'white', border: 'none' }}>Update Price Online</button>
+                                        <button className="btn-secondary" onClick={handleAutoFillShowtile} style={{ padding: '4px 8px', fontSize: '0.8rem' }}>Auto Fill from Inventory</button>
+                                    </div>
                                 </div>
                                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
                                     <div className="form-group" style={{ margin: 0 }}>
@@ -516,6 +580,16 @@ export default function ProductModal({
                                     </div>
                                 )}
                             </div>
+                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px', marginTop: '16px' }}>
+                                <div className="form-group" style={{ margin: 0 }}>
+                                    <label style={{ display: 'block', marginBottom: '6px', fontSize: '0.85rem', color: '#475569' }}>Regular Price</label>
+                                    <input type="number" step="0.01" className="form-control" value={productFormData.cht_regular_price || ''} onChange={e => setProductFormData({ ...productFormData, cht_regular_price: e.target.value })} style={{ width: '100%', padding: '6px 10px', border: '1px solid #cbd5e1', borderRadius: '4px' }} />
+                                </div>
+                                <div className="form-group" style={{ margin: 0 }}>
+                                    <label style={{ display: 'block', marginBottom: '6px', fontSize: '0.85rem', color: '#475569' }}>Sales Price</label>
+                                    <input type="number" step="0.01" className="form-control" value={productFormData.cht_sales_price || ''} onChange={e => setProductFormData({ ...productFormData, cht_sales_price: e.target.value })} style={{ width: '100%', padding: '6px 10px', border: '1px solid #cbd5e1', borderRadius: '4px' }} />
+                                </div>
+                            </div>
                         </div>
                     )}
 
@@ -552,6 +626,16 @@ export default function ProductModal({
                                         ))}
                                     </div>
                                 )}
+                            </div>
+                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px', marginTop: '16px' }}>
+                                <div className="form-group" style={{ margin: 0 }}>
+                                    <label style={{ display: 'block', marginBottom: '6px', fontSize: '0.85rem', color: '#475569' }}>Regular Price</label>
+                                    <input type="number" step="0.01" className="form-control" value={productFormData.gto_regular_price || ''} onChange={e => setProductFormData({ ...productFormData, gto_regular_price: e.target.value })} style={{ width: '100%', padding: '6px 10px', border: '1px solid #cbd5e1', borderRadius: '4px' }} />
+                                </div>
+                                <div className="form-group" style={{ margin: 0 }}>
+                                    <label style={{ display: 'block', marginBottom: '6px', fontSize: '0.85rem', color: '#475569' }}>Sales Price</label>
+                                    <input type="number" step="0.01" className="form-control" value={productFormData.gto_sales_price || ''} onChange={e => setProductFormData({ ...productFormData, gto_sales_price: e.target.value })} style={{ width: '100%', padding: '6px 10px', border: '1px solid #cbd5e1', borderRadius: '4px' }} />
+                                </div>
                             </div>
                         </div>
                     )}

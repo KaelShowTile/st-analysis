@@ -4,6 +4,97 @@ import { Upload, Search, Trash2, Edit3, X, Save } from 'lucide-react';
 import { getDb } from '../db/Database';
 import './Inventory.css';
 
+
+const extractFeatures = (salesDesc, colours, finishes) => {
+    let text = salesDesc;
+    let startIndex = text.indexOf(')');
+    let endIndex = text.indexOf('[');
+
+    if (startIndex === -1) startIndex = 0;
+    else startIndex += 1;
+
+    if (endIndex === -1) endIndex = text.length;
+
+    if (startIndex < endIndex) {
+        text = text.substring(startIndex, endIndex).trim();
+    } else {
+        text = text.trim();
+    }
+
+    let extractedSize = '';
+    let extractedFinish = '';
+    let extractedColour = '';
+    let extractedName = '';
+
+    let firstParamIndex = -1;
+    let lastParamIndex = -1;
+
+    const findMatch = (list, str) => {
+        for (const item of list) {
+            const regex = new RegExp(`\\b${item}\\b`, 'i');
+            const match = str.match(regex);
+            if (match) {
+                return { item, index: match.index, length: match[0].length };
+            }
+        }
+        return null;
+    };
+
+    const colourMatch = findMatch(colours, text);
+    const finishMatch = findMatch(finishes, text);
+
+    if (colourMatch) {
+        extractedColour = colourMatch.item;
+        firstParamIndex = colourMatch.index;
+        lastParamIndex = colourMatch.index + colourMatch.length;
+    }
+
+    if (finishMatch) {
+        extractedFinish = finishMatch.item;
+        if (firstParamIndex === -1 || finishMatch.index < firstParamIndex) {
+            firstParamIndex = finishMatch.index;
+        }
+        const endIdx = finishMatch.index + finishMatch.length;
+        if (endIdx > lastParamIndex) {
+            lastParamIndex = endIdx;
+        }
+    }
+
+    const sizeRegex = /\b\d+(?:\.\d+)?\s*[xX]\s*\d+(?:\.\d+)?(?:\s*[xX]\s*\d+(?:\.\d+)?)?\b/;
+
+    if (firstParamIndex !== -1) {
+        extractedName = text.substring(0, firstParamIndex).trim();
+        let remainder = text.substring(lastParamIndex).trim();
+        const slashIndex = remainder.indexOf('/');
+        if (slashIndex !== -1) {
+            remainder = remainder.substring(0, slashIndex).trim();
+        }
+        const sizeMatch = remainder.match(sizeRegex);
+        if (sizeMatch) {
+            extractedSize = sizeMatch[0];
+        }
+    } else {
+        const sizeMatch = text.match(sizeRegex);
+        if (sizeMatch) {
+            extractedSize = sizeMatch[0];
+            extractedName = text.substring(0, sizeMatch.index).trim();
+        } else {
+            extractedName = text.trim();
+        }
+    }
+
+    const backorder = salesDesc.toLowerCase().includes('backorder') ? 1 : 0;
+    let backorder_amount = 0;
+    if (backorder) {
+        const match = salesDesc.match(/backorder-?(\d+(?:\.\d+)?)/i);
+        if (match && match[1]) {
+            backorder_amount = parseFloat(match[1]);
+        }
+    }
+
+    return { extractedName, extractedColour, extractedFinish, extractedSize, backorder, backorder_amount };
+};
+
 export default function Inventory({ currentUser }) {
     const [data, setData] = useState([]);
     const [loading, setLoading] = useState(true);
@@ -37,6 +128,40 @@ export default function Inventory({ currentUser }) {
         loadData(true);
     }, []);
 
+
+    const handleAutoAnalysis = async () => {
+        if (!canWrite) return;
+        setLoading(true);
+        try {
+            const db = await getDb();
+            const attributes = await db.select('SELECT * FROM attributes');
+            const colours = attributes.filter(a => a.type === 'colour').map(a => a.value.toLowerCase());
+            const finishes = attributes.filter(a => a.type === 'finish').map(a => a.value.toLowerCase());
+
+            // Retrieve all rows where extracted_name is empty or null
+            const rows = await db.select("SELECT product_id, sku, sales_description FROM inventory WHERE extracted_name IS NULL OR extracted_name = ''");
+
+            for (const row of rows) {
+                const salesDesc = String(row.sales_description || '');
+                const features = extractFeatures(salesDesc, colours, finishes);
+
+                await db.execute(`
+                    UPDATE inventory SET 
+                        extracted_name = $1, extracted_colour = $2, extracted_finish = $3, 
+                        extracted_size = $4, backorder = $5, backorder_amount = $6 
+                    WHERE sku = $7
+                `, [features.extractedName, features.extractedColour, features.extractedFinish, features.extractedSize, features.backorder, features.backorder_amount, row.sku]);
+            }
+            loadData();
+            alert(`Auto Analysis complete. Processed ${rows.length} records.`);
+        } catch (err) {
+            console.error(err);
+            alert("Auto Analysis failed");
+        } finally {
+            setLoading(false);
+        }
+    };
+
     const processData = async (parsedData) => {
         if (!canWrite) return;
         setLoading(true);
@@ -68,176 +193,94 @@ export default function Inventory({ currentUser }) {
                     for (const row of chunk) {
                         if (!row['SKU'] || row['SKU'].trim() === '') continue; // skip invalid rows
 
-                    const salesDesc = String(row['Sales Description'] || '');
+                        const salesDesc = String(row['Sales Description'] || '');
 
-                    let text = salesDesc;
-                    let startIndex = text.indexOf(')');
-                    let endIndex = text.indexOf('[');
+                        const {
+                            extractedName, extractedColour, extractedFinish, extractedSize, backorder, backorder_amount
+                        } = extractFeatures(salesDesc, colours, finishes);
 
-                    if (startIndex === -1) startIndex = 0;
-                    else startIndex += 1;
+                        const sku = String(row['SKU']).trim();
+                        const stock_no = String(row['Stock No.'] || '');
+                        const sales_desc = String(row['Sales Description'] || '');
+                        const supplier = String(row['Supplier'] || '');
+                        const available = parseNumber(row['Available Qty'] || row['Available']);
+                        const holding = parseNumber(row['Holding']);
+                        const so_qty = parseNumber(row['SO Qty']);
+                        const total_qty = parseNumber(row['Total Qty']);
+                        const rrp = parseNumber(row['RRP']);
+                        const cost = parseNumber(row['Cost']);
+                        const online_name = String(row['Online(the name using on online sale)'] || row['Online'] || '');
+                        const showtile = String(row['Showtile(The name use in store sale)'] || row['Showtile'] || '');
+                        const pallet_qty = parseNumber(row['Pallet Qty']);
+                        const box_qty = parseNumber(row['Box Qty']);
+                        const piece_qty = parseNumber(row['Piece Qty']);
+                        const m2_per_box = parseNumber(row['m2/Box']);
+                        const pcs_per_box = parseNumber(row['pcs/Box']);
+                        const box_per_pallet = parseNumber(row['box/Pallet']);
+                        const stk = String(row['STK'] || '');
 
-                    if (endIndex === -1) endIndex = text.length;
-
-                    if (startIndex < endIndex) {
-                        text = text.substring(startIndex, endIndex).trim();
-                    } else {
-                        text = text.trim();
-                    }
-
-                    let extractedSize = '';
-                    let extractedFinish = '';
-                    let extractedColour = '';
-                    let extractedName = '';
-
-                    let firstParamIndex = -1;
-                    let lastParamIndex = -1;
-
-                    const findMatch = (list, str) => {
-                        for (const item of list) {
-                            const regex = new RegExp(`\\b${item}\\b`, 'i');
-                            const match = str.match(regex);
-                            if (match) {
-                                return { item, index: match.index, length: match[0].length };
+                        let days = '';
+                        if (row['Days'] !== undefined && row['Days'] !== '') {
+                            const daysNum = parseFloat(String(row['Days']).replace(/,/g, '').trim());
+                            if (!isNaN(daysNum)) {
+                                const d = new Date();
+                                d.setDate(d.getDate() - daysNum);
+                                const year = d.getFullYear();
+                                const month = String(d.getMonth() + 1).padStart(2, '0');
+                                const day = String(d.getDate()).padStart(2, '0');
+                                days = `${year}-${month}-${day}`;
                             }
                         }
-                        return null;
-                    };
 
-                    const colourMatch = findMatch(colours, text);
-                    const finishMatch = findMatch(finishes, text);
+                        const x_inactive = String(row['X/Inactive'] || '');
+                        const batch = String(row['Batch'] || '');
+                        const location = String(row['Location'] || '');
 
-                    if (colourMatch) {
-                        extractedColour = colourMatch.item;
-                        firstParamIndex = colourMatch.index;
-                        lastParamIndex = colourMatch.index + colourMatch.length;
-                    }
+                        const existing = inventoryMap.get(sku);
+                        let shouldUpdate = false;
 
-                    if (finishMatch) {
-                        extractedFinish = finishMatch.item;
-                        if (firstParamIndex === -1 || finishMatch.index < firstParamIndex) {
-                            firstParamIndex = finishMatch.index;
-                        }
-                        const endIdx = finishMatch.index + finishMatch.length;
-                        if (endIdx > lastParamIndex) {
-                            lastParamIndex = endIdx;
-                        }
-                    }
-
-                    const sizeRegex = /\b\d+(?:\.\d+)?\s*[xX]\s*\d+(?:\.\d+)?(?:\s*[xX]\s*\d+(?:\.\d+)?)?\b/;
-
-                    if (firstParamIndex !== -1) {
-                        extractedName = text.substring(0, firstParamIndex).trim();
-                        let remainder = text.substring(lastParamIndex).trim();
-                        const slashIndex = remainder.indexOf('/');
-                        if (slashIndex !== -1) {
-                            remainder = remainder.substring(0, slashIndex).trim();
-                        }
-                        const sizeMatch = remainder.match(sizeRegex);
-                        if (sizeMatch) {
-                            extractedSize = sizeMatch[0];
-                        }
-                    } else {
-                        const sizeMatch = text.match(sizeRegex);
-                        if (sizeMatch) {
-                            extractedSize = sizeMatch[0];
-                            extractedName = text.substring(0, sizeMatch.index).trim();
-                        } else {
-                            extractedName = text.trim();
-                        }
-                    }
-
-                    const sku = String(row['SKU']).trim();
-                    const stock_no = String(row['Stock No.'] || '');
-                    const sales_desc = String(row['Sales Description'] || '');
-                    const supplier = String(row['Supplier'] || '');
-                    const available = parseNumber(row['Available Qty'] || row['Available']);
-                    const holding = parseNumber(row['Holding']);
-                    const so_qty = parseNumber(row['SO Qty']);
-                    const total_qty = parseNumber(row['Total Qty']);
-                    const rrp = parseNumber(row['RRP']);
-                    const cost = parseNumber(row['Cost']);
-                    const online_name = String(row['Online(the name using on online sale)'] || row['Online'] || '');
-                    const showtile = String(row['Showtile(The name use in store sale)'] || row['Showtile'] || '');
-                    const pallet_qty = parseNumber(row['Pallet Qty']);
-                    const box_qty = parseNumber(row['Box Qty']);
-                    const piece_qty = parseNumber(row['Piece Qty']);
-                    const m2_per_box = parseNumber(row['m2/Box']);
-                    const pcs_per_box = parseNumber(row['pcs/Box']);
-                    const box_per_pallet = parseNumber(row['box/Pallet']);
-                    const stk = String(row['STK'] || '');
-
-                    let days = '';
-                    if (row['Days'] !== undefined && row['Days'] !== '') {
-                        const daysNum = parseFloat(String(row['Days']).replace(/,/g, '').trim());
-                        if (!isNaN(daysNum)) {
-                            const d = new Date();
-                            d.setDate(d.getDate() - daysNum);
-                            const year = d.getFullYear();
-                            const month = String(d.getMonth() + 1).padStart(2, '0');
-                            const day = String(d.getDate()).padStart(2, '0');
-                            days = `${year}-${month}-${day}`;
-                        }
-                    }
-
-                    const x_inactive = String(row['X/Inactive'] || '');
-                    const batch = String(row['Batch'] || '');
-                    const location = String(row['Location'] || '');
-
-                    const backorder = sales_desc.toLowerCase().includes('backorder') ? 1 : 0;
-                    let backorder_amount = 0;
-                    if (backorder) {
-                        const match = sales_desc.match(/backorder-?(\d+(?:\.\d+)?)/i);
-                        if (match && match[1]) {
-                            backorder_amount = parseFloat(match[1]);
-                        }
-                    }
-
-                    const existing = inventoryMap.get(sku);
-                    let shouldUpdate = false;
-                    
-                    if (!existing) {
-                        shouldUpdate = true;
-                    } else {
-                        const finalDays = days !== '' ? days : (existing.days || '');
-                        if (
-                            String(existing.stock_no || '') !== stock_no ||
-                            String(existing.sales_description || '') !== sales_desc ||
-                            String(existing.supplier || '') !== supplier ||
-                            Number(existing.available || 0) !== available ||
-                            Number(existing.holding || 0) !== holding ||
-                            Number(existing.so_qty || 0) !== so_qty ||
-                            Number(existing.total_qty || 0) !== total_qty ||
-                            Number(existing.rrp || 0) !== rrp ||
-                            Number(existing.cost || 0) !== cost ||
-                            String(existing.online_name || '') !== online_name ||
-                            String(existing.showtile_name || '') !== showtile ||
-                            Number(existing.pallet_qty || 0) !== pallet_qty ||
-                            Number(existing.box_qty || 0) !== box_qty ||
-                            Number(existing.piece_qty || 0) !== piece_qty ||
-                            Number(existing.m2_per_box || 0) !== m2_per_box ||
-                            Number(existing.pcs_per_box || 0) !== pcs_per_box ||
-                            Number(existing.box_per_pallet || 0) !== box_per_pallet ||
-                            String(existing.stk || '') !== stk ||
-                            String(existing.days || '') !== finalDays ||
-                            String(existing.x_inactive || '') !== x_inactive ||
-                            String(existing.batch || '') !== batch ||
-                            String(existing.location || '') !== location ||
-                            String(existing.extracted_name || '') !== extractedName ||
-                            String(existing.extracted_finish || '') !== extractedFinish ||
-                            String(existing.extracted_size || '') !== extractedSize ||
-                            String(existing.extracted_colour || '') !== extractedColour ||
-                            Number(existing.backorder || 0) !== backorder ||
-                            Number(existing.backorder_amount || 0) !== backorder_amount
-                        ) {
+                        if (!existing) {
                             shouldUpdate = true;
+                        } else {
+                            const finalDays = days !== '' ? days : (existing.days || '');
+                            if (
+                                String(existing.stock_no || '') !== stock_no ||
+                                String(existing.sales_description || '') !== sales_desc ||
+                                String(existing.supplier || '') !== supplier ||
+                                Number(existing.available || 0) !== available ||
+                                Number(existing.holding || 0) !== holding ||
+                                Number(existing.so_qty || 0) !== so_qty ||
+                                Number(existing.total_qty || 0) !== total_qty ||
+                                Number(existing.rrp || 0) !== rrp ||
+                                Number(existing.cost || 0) !== cost ||
+                                String(existing.online_name || '') !== online_name ||
+                                String(existing.showtile_name || '') !== showtile ||
+                                Number(existing.pallet_qty || 0) !== pallet_qty ||
+                                Number(existing.box_qty || 0) !== box_qty ||
+                                Number(existing.piece_qty || 0) !== piece_qty ||
+                                Number(existing.m2_per_box || 0) !== m2_per_box ||
+                                Number(existing.pcs_per_box || 0) !== pcs_per_box ||
+                                Number(existing.box_per_pallet || 0) !== box_per_pallet ||
+                                String(existing.stk || '') !== stk ||
+                                String(existing.days || '') !== finalDays ||
+                                String(existing.x_inactive || '') !== x_inactive ||
+                                String(existing.batch || '') !== batch ||
+                                String(existing.location || '') !== location ||
+                                String(existing.extracted_name || '') !== extractedName ||
+                                String(existing.extracted_finish || '') !== extractedFinish ||
+                                String(existing.extracted_size || '') !== extractedSize ||
+                                String(existing.extracted_colour || '') !== extractedColour ||
+                                Number(existing.backorder || 0) !== backorder ||
+                                Number(existing.backorder_amount || 0) !== backorder_amount
+                            ) {
+                                shouldUpdate = true;
+                            }
                         }
-                    }
 
-                    if (!shouldUpdate) return;
+                        if (!shouldUpdate) return;
 
-                    // Upsert logic
-                    await db.execute(`
+                        // Upsert logic
+                        await db.execute(`
                         INSERT INTO inventory (
                             sku, stock_no, sales_description, supplier, available, holding, so_qty, total_qty, rrp, cost, 
                             online_name, showtile_name, pallet_qty, box_qty, piece_qty, m2_per_box, pcs_per_box, box_per_pallet, 
@@ -382,6 +425,18 @@ export default function Inventory({ currentUser }) {
                     >
                         <Trash2 size={16} />
                         Clear All
+                    </button>
+                    <button
+                        className="btn-upload"
+                        onClick={handleAutoAnalysis}
+                        disabled={loading || !canWrite}
+                        style={{
+                            background: canWrite ? 'var(--primary-color)' : '#d1d5db',
+                            cursor: canWrite ? 'pointer' : 'not-allowed',
+                            opacity: canWrite ? 1 : 0.6
+                        }}
+                    >
+                        {loading ? 'Processing...' : 'Auto Analysis'}
                     </button>
                     <input
                         type="file"

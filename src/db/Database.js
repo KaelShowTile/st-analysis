@@ -101,13 +101,16 @@ export const getDb = async () => {
                     },
                     close: async () => {}
                 };
+                // Do NOT call initializeTables(dbProxy) for Turso.
+                // Turso is a remote, centrally managed database. 
+                // Client apps should not attempt to recreate tables or modify indexes on every startup,
+                // as this wastes write operations and can destroy manually configured cloud indexes.
                 
-                await initializeTables(dbProxy);
-                
-                try { await dbProxy.execute('ALTER TABLE containers ADD COLUMN deposit TEXT'); } catch(e) {}
-                try { await dbProxy.execute('ALTER TABLE containers ADD COLUMN balance TEXT'); } catch(e) {}
-                try { await dbProxy.execute('ALTER TABLE containers ADD COLUMN payment_date TEXT'); } catch(e) {}
-                try { await dbProxy.execute('ALTER TABLE reports ADD COLUMN ignore INTEGER DEFAULT 0'); } catch(e) {}
+                // await initializeTables(dbProxy);
+                // try { await dbProxy.execute('ALTER TABLE containers ADD COLUMN deposit TEXT'); } catch(e) {}
+                // try { await dbProxy.execute('ALTER TABLE containers ADD COLUMN balance TEXT'); } catch(e) {}
+                // try { await dbProxy.execute('ALTER TABLE containers ADD COLUMN payment_date TEXT'); } catch(e) {}
+                // try { await dbProxy.execute('ALTER TABLE reports ADD COLUMN ignore INTEGER DEFAULT 0'); } catch(e) {}
                 
                 console.log('Turso Database initialized successfully.');
                 return dbProxy;

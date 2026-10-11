@@ -329,11 +329,19 @@ export default function Products() {
         }
     };
 
-    const formatPrice = (regular, sales) => {
-        if (sales && regular) return `${sales} - ${regular}`;
+        const formatPrice = (regular, sales) => {
+        if (sales && regular) return <span>{sales} - <s style={{ color: '#94a3b8' }}>{regular}</s></span>;
         if (regular) return `${regular}`;
         if (sales) return `${sales}`;
         return '-';
+    };
+
+    const renderPriceColumn = (id, regular, sales, isSt = false, stPrice = null) => {
+        if (!id) return <span style={{ color: '#94a3b8' }}>not connect</span>;
+        if (isSt) {
+            return stPrice || '-';
+        }
+        return formatPrice(regular, sales);
     };
 
     return (
@@ -447,6 +455,7 @@ export default function Products() {
                                                                 <th style={{ padding: '12px 8px', color: '#64748b', fontWeight: 600, fontSize: '0.85rem', width: '150px' }}>Colour</th>
                                                                 <th style={{ padding: '12px 8px', color: '#64748b', fontWeight: 600, fontSize: '0.85rem', width: '150px' }}>Finish</th>
                                                                 <th style={{ padding: '12px 8px', color: '#64748b', fontWeight: 600, fontSize: '0.85rem', width: '150px' }}>Size</th>
+                                                                <th style={{ padding: '12px 8px', color: '#64748b', fontWeight: 600, fontSize: '0.85rem', width: '150px' }}>ST Price</th>
                                                                 <th style={{ padding: '12px 8px', color: '#64748b', fontWeight: 600, fontSize: '0.85rem', width: '150px' }}>CHT Price</th>
                                                                 <th style={{ padding: '12px 8px', color: '#64748b', fontWeight: 600, fontSize: '0.85rem', width: '150px' }}>GTO Price</th>
                                                                 <th style={{ padding: '12px 8px', color: '#64748b', fontWeight: 600, fontSize: '0.85rem', width: '240px' }}>Online Stock Status</th>
@@ -478,8 +487,9 @@ export default function Products() {
                                                                         <td style={{ padding: '12px 8px', fontSize: '0.9rem', color: '#475569' }}>{product.color}</td>
                                                                         <td style={{ padding: '12px 8px', fontSize: '0.9rem', color: '#475569' }}>{product.finish}</td>
                                                                         <td style={{ padding: '12px 8px', fontSize: '0.9rem', color: '#475569' }}>{product.size}</td>
-                                                                        <td style={{ padding: '12px 8px', fontSize: '0.9rem', color: '#475569' }}>{formatPrice(product.cht_regular_price, product.cht_sales_price)}</td>
-                                                                        <td style={{ padding: '12px 8px', fontSize: '0.9rem', color: '#475569' }}>{formatPrice(product.gto_regular_price, product.gto_sales_price)}</td>
+                                                                        <td style={{ padding: '12px 8px', fontSize: '0.9rem', color: '#475569' }}>{renderPriceColumn(product.st_id, null, null, true, product.showtile_price)}</td>
+                                                                        <td style={{ padding: '12px 8px', fontSize: '0.9rem', color: '#475569' }}>{renderPriceColumn(product.cht_id, product.cht_regular_price, product.cht_sales_price)}</td>
+                                                                        <td style={{ padding: '12px 8px', fontSize: '0.9rem', color: '#475569' }}>{renderPriceColumn(product.gto_id, product.gto_regular_price, product.gto_sales_price)}</td>
                                                                         <td style={{ padding: '12px 8px', fontSize: '0.9rem', color: '#475569' }}>
                                                                             <div style={{ display: 'flex', gap: '16px' }}>
                                                                                 <label style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer' }}>
