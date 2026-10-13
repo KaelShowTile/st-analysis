@@ -99,6 +99,13 @@ export const getDb = async () => {
                         queryCache.clear();
                         return await invoke('turso_execute', { query: safeQuery, args });
                     },
+                    sync: async () => {
+                        try {
+                            await invoke('turso_sync');
+                        } catch (e) {
+                            console.error("Turso sync error:", e);
+                        }
+                    },
                     close: async () => {}
                 };
                 // Do NOT call initializeTables(dbProxy) for Turso.
@@ -171,6 +178,7 @@ export const getDb = async () => {
                         queryCache.clear();
                         return await invoke('turso_execute', { query: safeQuery, args });
                     },
+                    sync: async () => {},
                     close: async () => {}
                 };
 
@@ -633,6 +641,27 @@ const initializeTables = async (db) => {
             END;
         `);
     } catch(e) { console.warn('trg_inventory_ad failed', e); }
+
+    // Customers
+    await db.execute(`
+        CREATE TABLE IF NOT EXISTS customer (
+            customer_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            abn TEXT,
+            company TEXT,
+            first_name TEXT,
+            last_name TEXT,
+            contact TEXT,
+            email TEXT,
+            tel1 TEXT,
+            tel2 TEXT,
+            street TEXT,
+            city TEXT,
+            state TEXT,
+            postcode TEXT,
+            st_login_name TEXT,
+            st_login_pass TEXT
+        )
+    `);
 
     // Auth System
     await db.execute(`

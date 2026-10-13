@@ -187,118 +187,135 @@ export default function Inventory({ currentUser }) {
                     return isNaN(num) ? 0 : num;
                 };
 
-                const chunkSize = 20;
-                for (let i = 0; i < parsedData.length; i += chunkSize) {
-                    const chunk = parsedData.slice(i, i + chunkSize);
-                    for (const row of chunk) {
-                        if (!row['SKU'] || row['SKU'].trim() === '') continue; // skip invalid rows
+                // Phase 1: Local comparison & filtering (0 remote Turso row reads)
+                const itemsToUpsert = [];
 
-                        const salesDesc = String(row['Sales Description'] || '');
+                for (const row of parsedData) {
+                    if (!row['SKU'] || row['SKU'].trim() === '') continue; // skip invalid rows
 
-                        const {
-                            extractedName, extractedColour, extractedFinish, extractedSize, backorder, backorder_amount
-                        } = extractFeatures(salesDesc, colours, finishes);
+                    const salesDesc = String(row['Sales Description'] || '');
 
-                        const sku = String(row['SKU']).trim();
-                        const stock_no = String(row['Stock No.'] || '');
-                        const sales_desc = String(row['Sales Description'] || '');
-                        const supplier = String(row['Supplier'] || '');
-                        const available = parseNumber(row['Available Qty'] || row['Available']);
-                        const holding = parseNumber(row['Holding']);
-                        const so_qty = parseNumber(row['SO Qty']);
-                        const total_qty = parseNumber(row['Total Qty']);
-                        const rrp = parseNumber(row['RRP']);
-                        const cost = parseNumber(row['Cost']);
-                        const online_name = String(row['Online(the name using on online sale)'] || row['Online'] || '');
-                        const showtile = String(row['Showtile(The name use in store sale)'] || row['Showtile'] || '');
-                        const pallet_qty = parseNumber(row['Pallet Qty']);
-                        const box_qty = parseNumber(row['Box Qty']);
-                        const piece_qty = parseNumber(row['Piece Qty']);
-                        const m2_per_box = parseNumber(row['m2/Box']);
-                        const pcs_per_box = parseNumber(row['pcs/Box']);
-                        const box_per_pallet = parseNumber(row['box/Pallet']);
-                        const stk = String(row['STK'] || '');
+                    const {
+                        extractedName, extractedColour, extractedFinish, extractedSize, backorder, backorder_amount
+                    } = extractFeatures(salesDesc, colours, finishes);
 
-                        let days = '';
-                        if (row['Days'] !== undefined && row['Days'] !== '') {
-                            const daysNum = parseFloat(String(row['Days']).replace(/,/g, '').trim());
-                            if (!isNaN(daysNum)) {
-                                const d = new Date();
-                                d.setDate(d.getDate() - daysNum);
-                                const year = d.getFullYear();
-                                const month = String(d.getMonth() + 1).padStart(2, '0');
-                                const day = String(d.getDate()).padStart(2, '0');
-                                days = `${year}-${month}-${day}`;
-                            }
+                    const sku = String(row['SKU']).trim();
+                    const stock_no = String(row['Stock No.'] || '');
+                    const sales_desc = String(row['Sales Description'] || '');
+                    const supplier = String(row['Supplier'] || '');
+                    const available = parseNumber(row['Available Qty'] || row['Available']);
+                    const holding = parseNumber(row['Holding']);
+                    const so_qty = parseNumber(row['SO Qty']);
+                    const total_qty = parseNumber(row['Total Qty']);
+                    const rrp = parseNumber(row['RRP']);
+                    const cost = parseNumber(row['Cost']);
+                    const online_name = String(row['Online(the name using on online sale)'] || row['Online'] || '');
+                    const showtile = String(row['Showtile(The name use in store sale)'] || row['Showtile'] || '');
+                    const pallet_qty = parseNumber(row['Pallet Qty']);
+                    const box_qty = parseNumber(row['Box Qty']);
+                    const piece_qty = parseNumber(row['Piece Qty']);
+                    const m2_per_box = parseNumber(row['m2/Box']);
+                    const pcs_per_box = parseNumber(row['pcs/Box']);
+                    const box_per_pallet = parseNumber(row['box/Pallet']);
+                    const stk = String(row['STK'] || '');
+
+                    let days = '';
+                    if (row['Days'] !== undefined && row['Days'] !== '') {
+                        const daysNum = parseFloat(String(row['Days']).replace(/,/g, '').trim());
+                        if (!isNaN(daysNum)) {
+                            const d = new Date();
+                            d.setDate(d.getDate() - daysNum);
+                            const year = d.getFullYear();
+                            const month = String(d.getMonth() + 1).padStart(2, '0');
+                            const day = String(d.getDate()).padStart(2, '0');
+                            days = `${year}-${month}-${day}`;
                         }
+                    }
 
-                        const x_inactive = String(row['X/Inactive'] || '');
-                        const batch = String(row['Batch'] || '');
-                        const location = String(row['Location'] || '');
+                    const x_inactive = String(row['X/Inactive'] || '');
+                    const batch = String(row['Batch'] || '');
+                    const location = String(row['Location'] || '');
 
-                        const existing = inventoryMap.get(sku);
-                        let shouldUpdate = false;
+                    const existing = inventoryMap.get(sku);
+                    let shouldUpdate = false;
 
-                        if (!existing) {
+                    if (!existing) {
+                        shouldUpdate = true;
+                    } else {
+                        const finalDays = days !== '' ? days : (existing.days || '');
+                        if (
+                            String(existing.stock_no || '') !== stock_no ||
+                            String(existing.sales_description || '') !== sales_desc ||
+                            String(existing.supplier || '') !== supplier ||
+                            Number(existing.available || 0) !== available ||
+                            Number(existing.holding || 0) !== holding ||
+                            Number(existing.so_qty || 0) !== so_qty ||
+                            Number(existing.total_qty || 0) !== total_qty ||
+                            Number(existing.rrp || 0) !== rrp ||
+                            Number(existing.cost || 0) !== cost ||
+                            String(existing.online_name || '') !== online_name ||
+                            String(existing.showtile_name || '') !== showtile ||
+                            Number(existing.pallet_qty || 0) !== pallet_qty ||
+                            Number(existing.box_qty || 0) !== box_qty ||
+                            Number(existing.piece_qty || 0) !== piece_qty ||
+                            Number(existing.m2_per_box || 0) !== m2_per_box ||
+                            Number(existing.pcs_per_box || 0) !== pcs_per_box ||
+                            Number(existing.box_per_pallet || 0) !== box_per_pallet ||
+                            String(existing.stk || '') !== stk ||
+                            String(existing.days || '') !== finalDays ||
+                            String(existing.x_inactive || '') !== x_inactive ||
+                            String(existing.batch || '') !== batch ||
+                            String(existing.location || '') !== location ||
+                            String(existing.extracted_name || '') !== extractedName ||
+                            String(existing.extracted_finish || '') !== extractedFinish ||
+                            String(existing.extracted_size || '') !== extractedSize ||
+                            String(existing.extracted_colour || '') !== extractedColour ||
+                            Number(existing.backorder || 0) !== backorder ||
+                            Number(existing.backorder_amount || 0) !== backorder_amount
+                        ) {
                             shouldUpdate = true;
-                        } else {
-                            const finalDays = days !== '' ? days : (existing.days || '');
-                            if (
-                                String(existing.stock_no || '') !== stock_no ||
-                                String(existing.sales_description || '') !== sales_desc ||
-                                String(existing.supplier || '') !== supplier ||
-                                Number(existing.available || 0) !== available ||
-                                Number(existing.holding || 0) !== holding ||
-                                Number(existing.so_qty || 0) !== so_qty ||
-                                Number(existing.total_qty || 0) !== total_qty ||
-                                Number(existing.rrp || 0) !== rrp ||
-                                Number(existing.cost || 0) !== cost ||
-                                String(existing.online_name || '') !== online_name ||
-                                String(existing.showtile_name || '') !== showtile ||
-                                Number(existing.pallet_qty || 0) !== pallet_qty ||
-                                Number(existing.box_qty || 0) !== box_qty ||
-                                Number(existing.piece_qty || 0) !== piece_qty ||
-                                Number(existing.m2_per_box || 0) !== m2_per_box ||
-                                Number(existing.pcs_per_box || 0) !== pcs_per_box ||
-                                Number(existing.box_per_pallet || 0) !== box_per_pallet ||
-                                String(existing.stk || '') !== stk ||
-                                String(existing.days || '') !== finalDays ||
-                                String(existing.x_inactive || '') !== x_inactive ||
-                                String(existing.batch || '') !== batch ||
-                                String(existing.location || '') !== location ||
-                                String(existing.extracted_name || '') !== extractedName ||
-                                String(existing.extracted_finish || '') !== extractedFinish ||
-                                String(existing.extracted_size || '') !== extractedSize ||
-                                String(existing.extracted_colour || '') !== extractedColour ||
-                                Number(existing.backorder || 0) !== backorder ||
-                                Number(existing.backorder_amount || 0) !== backorder_amount
-                            ) {
-                                shouldUpdate = true;
-                            }
                         }
+                    }
 
-                        if (!shouldUpdate) return;
+                    if (shouldUpdate) {
+                        itemsToUpsert.push([
+                            sku, stock_no, sales_desc, supplier, available, holding, so_qty, total_qty, rrp, cost,
+                            online_name, showtile, pallet_qty, box_qty, piece_qty, m2_per_box, pcs_per_box, box_per_pallet,
+                            stk, days, x_inactive, batch, location, extractedName, extractedFinish, extractedSize, extractedColour,
+                            backorder, backorder_amount
+                        ]);
+                    }
+                }
 
-                        // Upsert logic
-                        await db.execute(`
-                        INSERT INTO inventory (
-                            sku, stock_no, sales_description, supplier, available, holding, so_qty, total_qty, rrp, cost, 
-                            online_name, showtile_name, pallet_qty, box_qty, piece_qty, m2_per_box, pcs_per_box, box_per_pallet, 
-                            stk, days, x_inactive, batch, location, extracted_name, extracted_finish, extracted_size, extracted_colour, backorder, backorder_amount
-                        ) VALUES (
-                            $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29
-                        )
-                        ON CONFLICT(sku) DO UPDATE SET 
-                            stock_no=excluded.stock_no, sales_description=excluded.sales_description, supplier=excluded.supplier, 
-                            available=excluded.available, holding=excluded.holding, so_qty=excluded.so_qty, total_qty=excluded.total_qty, 
-                            rrp=excluded.rrp, cost=excluded.cost, online_name=excluded.online_name, showtile_name=excluded.showtile_name, 
-                            pallet_qty=excluded.pallet_qty, box_qty=excluded.box_qty, piece_qty=excluded.piece_qty, 
-                            m2_per_box=excluded.m2_per_box, pcs_per_box=excluded.pcs_per_box, box_per_pallet=excluded.box_per_pallet, 
-                            stk=excluded.stk, 
-                            days = CASE WHEN excluded.days != '' THEN excluded.days ELSE inventory.days END, 
-                            x_inactive=excluded.x_inactive, batch=excluded.batch, 
-                            location=excluded.location, backorder=excluded.backorder, backorder_amount=excluded.backorder_amount
-                    `, [sku, stock_no, sales_desc, supplier, available, holding, so_qty, total_qty, rrp, cost, online_name, showtile, pallet_qty, box_qty, piece_qty, m2_per_box, pcs_per_box, box_per_pallet, stk, days, x_inactive, batch, location, extractedName, extractedFinish, extractedSize, extractedColour, backorder, backorder_amount]);
+                // Phase 2: Batch multi-row upsert to remote DB (High speed, minimal roundtrips & row reads)
+                if (itemsToUpsert.length > 0) {
+                    const batchSize = 25; // 25 rows * 29 columns = 725 parameters, safely below SQLite 999 limit
+                    for (let i = 0; i < itemsToUpsert.length; i += batchSize) {
+                        const chunk = itemsToUpsert.slice(i, i + batchSize);
+                        const rowPlaceholders = chunk.map(() => `(${new Array(29).fill('?').join(', ')})`).join(',\n');
+                        const batchQuery = `
+                            INSERT INTO inventory (
+                                sku, stock_no, sales_description, supplier, available, holding, so_qty, total_qty, rrp, cost, 
+                                online_name, showtile_name, pallet_qty, box_qty, piece_qty, m2_per_box, pcs_per_box, box_per_pallet, 
+                                stk, days, x_inactive, batch, location, extracted_name, extracted_finish, extracted_size, extracted_colour, backorder, backorder_amount
+                            ) VALUES 
+                            ${rowPlaceholders}
+                            ON CONFLICT(sku) DO UPDATE SET 
+                                stock_no=excluded.stock_no, sales_description=excluded.sales_description, supplier=excluded.supplier, 
+                                available=excluded.available, holding=excluded.holding, so_qty=excluded.so_qty, total_qty=excluded.total_qty, 
+                                rrp=excluded.rrp, cost=excluded.cost, online_name=excluded.online_name, showtile_name=excluded.showtile_name, 
+                                pallet_qty=excluded.pallet_qty, box_qty=excluded.box_qty, piece_qty=excluded.piece_qty, 
+                                m2_per_box=excluded.m2_per_box, pcs_per_box=excluded.pcs_per_box, box_per_pallet=excluded.box_per_pallet, 
+                                stk=excluded.stk, 
+                                days = CASE WHEN excluded.days != '' THEN excluded.days ELSE inventory.days END, 
+                                x_inactive=excluded.x_inactive, batch=excluded.batch, 
+                                location=excluded.location, backorder=excluded.backorder, backorder_amount=excluded.backorder_amount
+                        `;
+                        const batchArgs = chunk.flat();
+                        await db.execute(batchQuery, batchArgs);
+                    }
+                    if (db.sync) {
+                        await db.sync();
                     }
                 }
             } catch (innerErr) {

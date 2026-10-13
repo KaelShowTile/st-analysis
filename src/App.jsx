@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Home, LayoutDashboard, Settings as SettingsIcon, Sun, Moon, Receipt, BarChart2, LogOut, Box, Calculator, Package, Loader2 } from 'lucide-react';
+import { Home, LayoutDashboard, Settings as SettingsIcon, Sun, Moon, Receipt, BarChart2, LogOut, Box, Calculator, Package, Loader2, Users } from 'lucide-react';
 import { getDb, getDbPath, getSetting } from './db/Database';
 import { appDataDir, join, dirname } from '@tauri-apps/api/path';
 import { copyFile, mkdir, readDir, remove, exists } from '@tauri-apps/plugin-fs';
@@ -15,6 +15,7 @@ import Containers from './pages/Containers';
 import Settings from './pages/Settings';
 import Login from './pages/Login';
 import CostReport from './pages/CostReport';
+import Customers from './pages/Customers';
 
 function App() {
   const [activeTab, setActiveTab] = useState('dashboard');
@@ -260,6 +261,12 @@ function App() {
                 Sales
               </li>
             )}
+            {(p.admin || p.customers?.read) && (
+              <li className={`nav-item ${activeTab === 'customers' ? 'active' : ''}`} onClick={() => navigateTo('customers')}>
+                <Users size={18} />
+                Customers
+              </li>
+            )}
             {p.reports?.read && (
               <li className={`nav-item ${activeTab === 'reports' ? 'active' : ''}`} onClick={() => navigateTo('reports')}>
                 <BarChart2 size={18} />
@@ -317,6 +324,11 @@ function App() {
           {p.sales?.read && (
             <div style={{ display: activeTab === 'sales' ? 'block' : 'none', height: '100%' }}>
               <Sales currentUser={currentUser} isActive={activeTab === 'sales'} />
+            </div>
+          )}
+          {(p.admin || p.customers?.read) && (
+            <div style={{ display: activeTab === 'customers' ? 'block' : 'none', height: '100%' }}>
+              <Customers currentUser={currentUser} isActive={activeTab === 'customers'} />
             </div>
           )}
           {p.reports?.read && (
