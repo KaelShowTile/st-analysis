@@ -16,6 +16,7 @@ import Settings from './pages/Settings';
 import Login from './pages/Login';
 import CostReport from './pages/CostReport';
 import Customers from './pages/Customers';
+import { fetchProductFeeds } from './utils/productFeeds';
 
 function App() {
   const [activeTab, setActiveTab] = useState('dashboard');
@@ -100,64 +101,6 @@ function App() {
           }
         }
 
-        const fetchProductFeeds = async () => {
-          try {
-            const store = await load('settings.json', { autoSave: false });
-            const chtUrl = await store.get('cht_feed');
-            const gtoUrl = await store.get('gto_feed');
-            const stUrl = await store.get('st_feed');
-            
-            window.productFeeds = { cht: [], gto: [], st: [] };
-
-            const fetchFeed = async (url) => {
-              if (!url) return [];
-              try {
-                const res = await tauriFetch(url);
-                if (!res.ok) {
-                  console.error("HTTP error when fetching feed:", res.status, url);
-                  return [];
-                }
-                const data = await res.json();
-                return data.map(item => {
-                  const match = item.name?.match(/(.+)\s*\(Code:(.+)\)/i);
-                  let parsedName = item.name || '';
-                  let parsedCode = '';
-                  if (match) {
-                    parsedName = match[1].trim();
-                    parsedCode = match[2].trim();
-                  }
-                  return { ...item, parsedName, parsedCode };
-                });
-              } catch (e) {
-                console.error("Failed to fetch feed", url, e);
-                return [];
-              }
-            };
-
-            const fetchStFeed = async (url) => {
-              if (!url) return [];
-              try {
-                const res = await tauriFetch(url);
-                if (!res.ok) {
-                  console.error("HTTP error when fetching ST feed:", res.status, url);
-                  return [];
-                }
-                const data = await res.json();
-                if (data && data.posts) {
-                    return data.posts;
-                }
-                return [];
-              } catch (e) {
-                console.error("Failed to fetch ST feed", url, e);
-                return [];
-              }
-            };
-
-            window.productFeeds.cht = await fetchFeed(chtUrl);
-            window.productFeeds.gto = await fetchFeed(gtoUrl);
-            window.productFeeds.st = await fetchStFeed(stUrl);
-          } catch(e) { console.error("Error loading product feeds:", e); }
-        };
         fetchProductFeeds();
 
         try {

@@ -1,5 +1,5 @@
 import React from 'react';
-import { Edit3, X, Save } from 'lucide-react';
+import { Edit3, X, Save, Search } from 'lucide-react';
 import { getDb } from '../db/Database';
 import '../pages/Inventory.css';
 
@@ -8,6 +8,7 @@ function ProductMatch() {
     const [productsList, setProductsList] = React.useState([]);
     const [attributes, setAttributes] = React.useState({ colours: [], finishes: [] });
     const [loading, setLoading] = React.useState(false);
+    const [search, setSearch] = React.useState('');
     const [drafts, setDrafts] = React.useState({});
     const [editModal, setEditModal] = React.useState({ show: false, item: null, field: '', val: '', options: [] });
 
@@ -88,12 +89,40 @@ function ProductMatch() {
         } catch (e) { console.error(e); alert('Failed to ignore'); }
     };
 
+    const term = search.trim().toLowerCase();
+    const filteredRecords = term
+        ? records.filter(r => {
+            const draft = drafts[r.product_id] || {};
+            const eName = draft.extracted_name !== undefined ? draft.extracted_name : (r.extracted_name || '');
+            return (
+                String(r.sku || '').toLowerCase().includes(term) ||
+                String(r.sales_description || '').toLowerCase().includes(term) ||
+                String(eName || '').toLowerCase().includes(term)
+            );
+        })
+        : records;
+
     return (
         <div className="inventory-container">
             <datalist id="products-list-match">
                 {productsList.map(p => <option key={p.product_id} value={p.product_name} />)}
             </datalist>
-            <div className="table-container" style={{ margin: '-10px 0 0 0' }}>
+            <div className="toolbar" style={{ margin: '0 0 16px 0' }}>
+                <div className="search-box">
+                    <Search size={18} className="search-icon" />
+                    <input
+                        type="text"
+                        placeholder="Search SKU, Description, Extracted Name..."
+                        value={search}
+                        onChange={e => setSearch(e.target.value)}
+                        className="search-input"
+                    />
+                </div>
+                <div style={{ color: 'var(--text-color)', fontSize: '0.9rem', marginRight: 'auto', marginLeft: '16px' }}>
+                    Total Records: {filteredRecords.length}
+                </div>
+            </div>
+            <div className="table-container" style={{ margin: 0 }}>
                 {loading ? (
                     <div className="loading-spinner-container">
                         <div className="spinner"></div>
@@ -114,7 +143,7 @@ function ProductMatch() {
                             </tr>
                         </thead>
                         <tbody>
-                            {records.map(r => {
+                            {filteredRecords.map(r => {
                                 const draft = drafts[r.product_id] || {};
                                 const eName = draft.extracted_name !== undefined ? draft.extracted_name : (r.extracted_name || '');
                                 const eFinish = draft.extracted_finish !== undefined ? draft.extracted_finish : (r.extracted_finish || '');
@@ -148,7 +177,7 @@ function ProductMatch() {
                                     </tr>
                                 );
                             })}
-                            {records.length === 0 && <tr><td colSpan="8" className="empty-state">No records to match.</td></tr>}
+                            {filteredRecords.length === 0 && <tr><td colSpan="8" className="empty-state">{search ? 'No matching records found.' : 'No records to match.'}</td></tr>}
                         </tbody>
                     </table>
                 )}

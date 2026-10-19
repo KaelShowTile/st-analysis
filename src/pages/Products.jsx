@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react';
-import { Search, Plus, Edit2, Edit3, X, ChevronDown, ChevronRight, Package, Save, Wand2, Trash2, Loader2 } from 'lucide-react';
+import { Search, Plus, Edit2, Edit3, X, ChevronDown, ChevronRight, Package, Save, Wand2, Trash2, Loader2, RefreshCw } from 'lucide-react';
 import { confirm } from '@tauri-apps/plugin-dialog';
 import { getDb } from '../db/Database';
+import { fetchProductFeeds } from '../utils/productFeeds';
 import './Inventory.css';
 
 // Standard styles from other components
@@ -43,6 +44,7 @@ export default function Products() {
 
     const [isAutoMatchingGlobal, setIsAutoMatchingGlobal] = useState(false);
     const [isAutoMatchingCollection, setIsAutoMatchingCollection] = useState(null);
+    const [isRefreshingFeeds, setIsRefreshingFeeds] = useState(false);
 
     const toggleCollection = (id) => {
         setExpandedCollections(prev => ({ ...prev, [id]: !prev[id] }));
@@ -139,6 +141,22 @@ export default function Products() {
             alert('Error');
         } finally {
             setIsAutoMatchingGlobal(false);
+        }
+    };
+
+    const handleRefreshFeeds = async () => {
+        setIsRefreshingFeeds(true);
+        try {
+            const feeds = await fetchProductFeeds();
+            const stCount = feeds.st?.length || 0;
+            const chtCount = feeds.cht?.length || 0;
+            const gtoCount = feeds.gto?.length || 0;
+            alert(`Product feeds refreshed successfully!\nST: ${stCount} items\nCHT: ${chtCount} items\nGTO: ${gtoCount} items`);
+        } catch (e) {
+            console.error("Failed to refresh feeds:", e);
+            alert("Failed to refresh product feeds.");
+        } finally {
+            setIsRefreshingFeeds(false);
         }
     };
 
@@ -329,7 +347,7 @@ export default function Products() {
         }
     };
 
-        const formatPrice = (regular, sales) => {
+    const formatPrice = (regular, sales) => {
         if (sales && regular) return <span>{sales} - <s style={{ color: '#94a3b8' }}>{regular}</s></span>;
         if (regular) return `${regular}`;
         if (sales) return `${sales}`;
@@ -369,13 +387,23 @@ export default function Products() {
                         <Search size={18} style={{ color: '#94a3b8', marginRight: '8px' }} />
                         <input
                             type="text"
-                            placeholder="Search products..."
+                            placeholder="Search products, ST code, collection..."
                             value={search}
                             onChange={(e) => setSearch(e.target.value)}
                             style={{ border: 'none', outline: 'none', background: 'transparent', width: '100%', fontSize: '0.9rem' }}
                         />
                     </div>
                     <div style={{ display: 'flex', gap: '12px' }}>
+                        <button
+                            className="btn-secondary"
+                            style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '8px 16px', borderRadius: '6px' }}
+                            onClick={handleRefreshFeeds}
+                            disabled={isRefreshingFeeds}
+                            title="Refresh product feeds from ST, CHT, and GTO"
+                        >
+                            {isRefreshingFeeds ? <Loader2 size={16} className="animate-spin" /> : <RefreshCw size={16} />}
+                            Refresh Feeds
+                        </button>
                         <button className="btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '8px 16px', borderRadius: '6px' }} onClick={() => {
                             setCollectionFormData({ id: null, name: '', shipper_id: '' });
                             setShowCollectionModal(true);
@@ -403,17 +431,21 @@ export default function Products() {
                         <>
                             {collections.length === 0 && <div style={{ padding: '24px', textAlign: 'center', color: '#64748b' }}>No collections found.</div>}
                             {collections.map(collection => {
+                                const term = search.trim().toLowerCase();
+                                const isCollectionMatch = term ? String(collection.collection_name || '').toLowerCase().includes(term) : false;
+
                                 const collectionProducts = products.filter(p => p.collection_id === collection.collection_id).filter(p => {
-                                    if (!search) return true;
-                                    const term = search.toLowerCase();
-                                    return (p.product_name || '').toLowerCase().includes(term) ||
-                                        (p.color || '').toLowerCase().includes(term) ||
-                                        (p.finish || '').toLowerCase().includes(term);
+                                    if (!term) return true;
+                                    if (isCollectionMatch) return true;
+                                    return String(p.product_name || '').toLowerCase().includes(term) ||
+                                        String(p.showtile_product_code || '').toLowerCase().includes(term) ||
+                                        String(p.color || '').toLowerCase().includes(term) ||
+                                        String(p.finish || '').toLowerCase().includes(term);
                                 });
 
-                                if (search && collectionProducts.length === 0) return null;
+                                if (term && collectionProducts.length === 0 && !isCollectionMatch) return null;
 
-                                const isExpanded = expandedCollections[collection.collection_id];
+                                const isExpanded = term ? true : expandedCollections[collection.collection_id];
 
                                 return (
                                     <div key={collection.collection_id} style={{ borderBottom: '1px solid #e2e8f0' }}>
@@ -451,6 +483,7 @@ export default function Products() {
                                                         <thead>
                                                             <tr style={{ borderBottom: '2px solid #e2e8f0', textAlign: 'left' }}>
                                                                 <th style={{ padding: '12px 8px', color: '#64748b', fontWeight: 600, fontSize: '0.85rem', width: '80px' }}>Actions</th>
+                                                                <th style={{ padding: '12px 8px', color: '#64748b', fontWeight: 600, fontSize: '0.85rem', width: '130px' }}>ST Code</th>
                                                                 <th style={{ padding: '12px 8px', color: '#64748b', fontWeight: 600, fontSize: '0.85rem' }}>Product Name</th>
                                                                 <th style={{ padding: '12px 8px', color: '#64748b', fontWeight: 600, fontSize: '0.85rem', width: '150px' }}>Colour</th>
                                                                 <th style={{ padding: '12px 8px', color: '#64748b', fontWeight: 600, fontSize: '0.85rem', width: '150px' }}>Finish</th>
@@ -483,6 +516,7 @@ export default function Products() {
                                                                                 <Trash2 size={16} />
                                                                             </button>
                                                                         </td>
+                                                                        <td style={{ padding: '12px 8px', fontSize: '0.9rem', color: '#475569' }}>{product.showtile_product_code}</td>
                                                                         <td style={{ padding: '12px 8px', fontSize: '0.9rem', color: '#1e293b' }}>{product.product_name}</td>
                                                                         <td style={{ padding: '12px 8px', fontSize: '0.9rem', color: '#475569' }}>{product.color}</td>
                                                                         <td style={{ padding: '12px 8px', fontSize: '0.9rem', color: '#475569' }}>{product.finish}</td>
