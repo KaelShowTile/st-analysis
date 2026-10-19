@@ -26,6 +26,6 @@ tauri-plugin-dialog = "2"
 tauri-plugin-fs = "2"
 tauri-plugin-store = "2.4.3"
 tauri-plugin-http = "2"
-libsql = { version = "0.9.30", features = ["replication"] }
+libsql = { version = "0.9.30", features = ["replication", "sync"] }
 tokio = { version = "1.53.1", features = ["full"] }
 

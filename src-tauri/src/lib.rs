@@ -33,15 +33,29 @@ async fn init_turso(
     url: String,
     token: String,
 ) -> Result<(), String> {
+    let local_exists = std::path::Path::new(&path).exists();
+
     let db = Builder::new_remote_replica(&path, url, token)
+        .sync_protocol(libsql::SyncProtocol::V2)
         .build()
         .await
         .map_err(|e| e.to_string())?;
 
     let conn = db.connect().map_err(|e| e.to_string())?;
-    
-    // Initial sync
-    db.sync().await.map_err(|e| e.to_string())?;
+
+    // Perform initial incremental sync with V2 protocol
+    match db.sync().await {
+        Ok(_) => {
+            println!("Initial Turso replica sync completed successfully.");
+        }
+        Err(e) => {
+            if local_exists {
+                eprintln!("Warning: Initial Turso sync encountered an error ({}), continuing with existing local replica.", e);
+            } else {
+                return Err(format!("Initial Turso sync failed: {}", e));
+            }
+        }
+    }
 
     *state.db.lock().await = Some(db);
     *state.conn.lock().await = Some(conn);
