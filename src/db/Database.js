@@ -2,10 +2,33 @@ import { invoke } from '@tauri-apps/api/core';
 import { load } from '@tauri-apps/plugin-store';
 import { appDataDir, join } from '@tauri-apps/api/path';
 import { exists, mkdir } from '@tauri-apps/plugin-fs';
+import { ulid } from 'ulid';
+import { scheduleDebouncedSync, triggerFullSync } from '../utils/syncService';
 
 let dbPromise = null;
 const queryCache = new Map();
 const inFlightQueries = new Map();
+
+export const generateId = () => ulid();
+
+export const updateDirtyFields = async (table, dirtyFields, whereCondition, whereArgs = []) => {
+    const keys = Object.keys(dirtyFields);
+    if (keys.length === 0) return 0;
+
+    const setClause = keys.map((k, i) => `${k} = $${i + 1}`).join(', ');
+    const values = keys.map(k => dirtyFields[k]);
+
+    let whereClause = whereCondition;
+    if (whereArgs.length > 0) {
+        whereClause = whereClause.replace(/\$(\d+)/g, (_, num) => `$${parseInt(num, 10) + keys.length}`);
+    }
+
+    const query = `UPDATE ${table} SET ${setClause} WHERE ${whereClause}`;
+    const allArgs = [...values, ...whereArgs];
+
+    const db = await getDb();
+    return await db.execute(query, allArgs);
+};
 
 export const getDbPath = async () => {
     const store = await load('settings.json', { autoSave: false });
@@ -53,12 +76,20 @@ export const getDb = async () => {
                 if (!(await exists(appDir))) {
                     await mkdir(appDir, { recursive: true });
                 }
-                const dbPath = await join(appDir, 'turso_replica.db');
+                const replicaPath = await join(appDir, 'turso_replica.db');
+                const mirrorPath = await join(appDir, 'mirror.db');
+                const queuePath = await join(appDir, 'queue.db');
                 
                 try {
-                    await invoke('init_turso', { path: dbPath, url, token: authToken });
+                    await invoke('init_sync_architecture', { 
+                        replicaPath, 
+                        mirrorPath, 
+                        queuePath, 
+                        url, 
+                        token: authToken 
+                    });
                 } catch (e) {
-                    console.error("Failed to initialize Turso replica:", e);
+                    console.error("Failed to initialize Turso 3-DB sync architecture:", e);
                     throw e;
                 }
                 
@@ -81,7 +112,7 @@ export const getDb = async () => {
                         }
 
                         const fetchPromise = (async () => {
-                            const data = await invoke('turso_select', { query: safeQuery, args });
+                            const data = await invoke('mirror_select', { query: safeQuery, args });
                             queryCache.set(cacheKey, { data, timestamp: Date.now() });
                             return data;
                         })();
@@ -97,29 +128,22 @@ export const getDb = async () => {
                     execute: async (query, args = []) => {
                         const safeQuery = query.replace(/\$\d+/g, '?');
                         queryCache.clear();
-                        return await invoke('turso_execute', { query: safeQuery, args });
+                        const result = await invoke('mirror_execute', { query: safeQuery, args });
+                        // Debounce push to worker after writes
+                        scheduleDebouncedSync();
+                        return result;
                     },
                     sync: async () => {
                         try {
-                            await invoke('turso_sync');
+                            await triggerFullSync();
                         } catch (e) {
                             console.error("Turso sync error:", e);
                         }
                     },
                     close: async () => {}
                 };
-                // Do NOT call initializeTables(dbProxy) for Turso.
-                // Turso is a remote, centrally managed database. 
-                // Client apps should not attempt to recreate tables or modify indexes on every startup,
-                // as this wastes write operations and can destroy manually configured cloud indexes.
                 
-                // await initializeTables(dbProxy);
-                // try { await dbProxy.execute('ALTER TABLE containers ADD COLUMN deposit TEXT'); } catch(e) {}
-                // try { await dbProxy.execute('ALTER TABLE containers ADD COLUMN balance TEXT'); } catch(e) {}
-                // try { await dbProxy.execute('ALTER TABLE containers ADD COLUMN payment_date TEXT'); } catch(e) {}
-                // try { await dbProxy.execute('ALTER TABLE reports ADD COLUMN ignore INTEGER DEFAULT 0'); } catch(e) {}
-                
-                console.log('Turso Database initialized successfully.');
+                console.log('Turso 3-Database Sync Architecture initialized successfully.');
                 return dbProxy;
             } else {
                 const customPath = await store.get('customDbPath');
@@ -160,7 +184,7 @@ export const getDb = async () => {
                         }
 
                         const fetchPromise = (async () => {
-                            const data = await invoke('turso_select', { query: safeQuery, args });
+                            const data = await invoke('mirror_select', { query: safeQuery, args });
                             queryCache.set(cacheKey, { data, timestamp: Date.now() });
                             return data;
                         })();
@@ -176,7 +200,7 @@ export const getDb = async () => {
                     execute: async (query, args = []) => {
                         const safeQuery = query.replace(/\$\d+/g, '?');
                         queryCache.clear();
-                        return await invoke('turso_execute', { query: safeQuery, args });
+                        return await invoke('mirror_execute', { query: safeQuery, args });
                     },
                     sync: async () => {},
                     close: async () => {}

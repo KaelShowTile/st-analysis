@@ -26,6 +26,9 @@ export default function Sales({ currentUser }) {
 
     useEffect(() => {
         loadData(true);
+        const handleSync = () => loadData(false);
+        window.addEventListener('database-synced', handleSync);
+        return () => window.removeEventListener('database-synced', handleSync);
     }, []);
 
     const processData = async (parsedData) => {
@@ -47,6 +50,8 @@ export default function Sales({ currentUser }) {
                 const num = parseFloat(String(val).replace(/,/g, '').trim());
                 return isNaN(num) ? 0 : num;
             };
+
+            const itemsToInsert = [];
 
             for (const row of parsedData) {
                 if (!row['SKU'] || String(row['SKU']).trim() === '') continue; // skip invalid rows
@@ -84,14 +89,25 @@ export default function Sales({ currentUser }) {
                         `, [date, time, sales_person, customer, description, qty, total_ex_tax, cost_ex_tax, invoice_no, sku]);
                     }
                 } else {
+                    itemsToInsert.push([date, time, sales_person, customer, invoice_no, sku, description, qty, total_ex_tax, cost_ex_tax]);
+                }
+            }
+
+            if (itemsToInsert.length > 0) {
+                const batchSize = 50;
+                for (let i = 0; i < itemsToInsert.length; i += batchSize) {
+                    const chunk = itemsToInsert.slice(i, i + batchSize);
+                    const placeholders = chunk.map(() => `(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).join(', ');
                     await db.execute(`
                         INSERT INTO sales (
                             date, time, sales_person, customer, invoice_no, sku, description, qty, total_ex_tax, cost_ex_tax
-                        ) VALUES (
-                            $1, $2, $3, $4, $5, $6, $7, $8, $9, $10
-                        )
-                    `, [date, time, sales_person, customer, invoice_no, sku, description, qty, total_ex_tax, cost_ex_tax]);
+                        ) VALUES ${placeholders}
+                    `, chunk.flat());
                 }
+            }
+
+            if (db.sync) {
+                await db.sync();
             }
             loadData();
         } catch (err) {
@@ -109,6 +125,9 @@ export default function Sales({ currentUser }) {
         try {
             const db = await getDb();
             await db.execute('DELETE FROM sales');
+            if (db.sync) {
+                await db.sync();
+            }
             loadData();
         } catch (err) {
             console.error("Failed to clear data", err);

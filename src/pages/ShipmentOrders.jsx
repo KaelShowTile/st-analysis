@@ -55,6 +55,13 @@ export default function ShipmentOrders({ currentUser, initialEditId, onClearEdit
         if (isActive !== false) {
             loadInitialData();
         }
+        const handleSync = () => {
+            if (isActive !== false) {
+                loadOrders();
+            }
+        };
+        window.addEventListener('database-synced', handleSync);
+        return () => window.removeEventListener('database-synced', handleSync);
     }, [isActive]);
 
     useEffect(() => {

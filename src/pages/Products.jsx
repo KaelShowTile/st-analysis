@@ -84,6 +84,9 @@ export default function Products() {
 
     useEffect(() => {
         loadData(true);
+        const handleSync = () => loadData(false);
+        window.addEventListener('database-synced', handleSync);
+        return () => window.removeEventListener('database-synced', handleSync);
     }, []);
 
     const loadData = async (isInitial = false) => {

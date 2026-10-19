@@ -123,6 +123,12 @@ export default function ContainerList({ currentUser, onNavigateToShipment, isAct
         if (activeYear) {
             loadRecords(activeYear);
         }
+        const handleSync = () => {
+            if (activeYear) loadRecords(activeYear);
+            loadMappings();
+        };
+        window.addEventListener('database-synced', handleSync);
+        return () => window.removeEventListener('database-synced', handleSync);
     }, [activeYear]);
 
     const loadQuota = async () => {

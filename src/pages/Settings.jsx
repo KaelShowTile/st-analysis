@@ -3,10 +3,11 @@ import { getDb, getDbPath, getSetting, setSetting, closeDb } from '../db/Databas
 import { save, open } from '@tauri-apps/plugin-dialog';
 import { writeTextFile } from '@tauri-apps/plugin-fs';
 import './Settings.css';
-import { Trash2, Plus, Download, Upload, DatabaseBackup, RotateCcw, FolderOpen, Edit3, X, UserCog, Save } from 'lucide-react';
+import { Trash2, Plus, Download, Upload, DatabaseBackup, RotateCcw, FolderOpen, Edit3, X, UserCog, Save, RefreshCw, Copy, Check } from 'lucide-react';
 import { appDataDir, join, dirname } from '@tauri-apps/api/path';
 import { readDir, copyFile, exists, mkdir } from '@tauri-apps/plugin-fs';
 import { load } from '@tauri-apps/plugin-store';
+import { getSyncConfig, saveSyncConfig, getQueueStats, triggerFullSync } from '../utils/syncService';
 
 export default function Settings({ currentUser }) {
     const [attributes, setAttributes] = useState([]);
@@ -18,6 +19,14 @@ export default function Settings({ currentUser }) {
     const [dbType, setDbType] = useState('sqlite');
     const [tursoUrl, setTursoUrl] = useState('');
     const [tursoToken, setTursoToken] = useState('');
+    const [syncWorkerUrl, setSyncWorkerUrl] = useState('');
+    const [syncWorkerSecret, setSyncWorkerSecret] = useState('');
+    const [deviceId, setDeviceId] = useState('');
+    const [copiedDeviceId, setCopiedDeviceId] = useState(false);
+    const [queueStats, setQueueStats] = useState({ pending_count: 0, failed_count: 0 });
+    const [isSyncing, setIsSyncing] = useState(false);
+    const [lastSyncInfo, setLastSyncInfo] = useState({ time: null, success: null, error: null });
+    const [savingWorker, setSavingWorker] = useState(false);
     const [maxContainerTracking, setMaxContainerTracking] = useState(50);
     const [timezone, setTimezone] = useState(Intl.DateTimeFormat().resolvedOptions().timeZone);
     const [findTeuApi, setFindTeuApi] = useState('https://findteu.showtile-apis.workers.dev/api');
@@ -94,7 +103,48 @@ export default function Settings({ currentUser }) {
         setGtoEndpoint(await store.get('gto_endpoint') || '');
         setGtoKey(await store.get('gto_key') || '');
         setGtoFeed(await store.get('gto_feed') || '');
+
+        const syncConf = await getSyncConfig();
+        setSyncWorkerUrl(syncConf.workerUrl || '');
+        setSyncWorkerSecret(syncConf.workerSecret || '');
+        setDeviceId(syncConf.deviceId || '');
+
+        const qStats = await getQueueStats();
+        setQueueStats(qStats);
     };
+
+    useEffect(() => {
+        const handleSyncStatus = (e) => {
+            const d = e.detail || {};
+            setIsSyncing(!!d.isSyncing);
+            if (d.lastSyncTime) {
+                setLastSyncInfo({
+                    time: d.lastSyncTime,
+                    success: !d.lastSyncError,
+                    error: d.lastSyncError
+                });
+            }
+            getQueueStats().then(setQueueStats);
+        };
+
+        const handleSynced = (e) => {
+            const d = e.detail || {};
+            setLastSyncInfo({
+                time: d.timestamp || Date.now(),
+                success: true,
+                error: null
+            });
+            getQueueStats().then(setQueueStats);
+        };
+
+        window.addEventListener('database-sync-status', handleSyncStatus);
+        window.addEventListener('database-synced', handleSynced);
+
+        return () => {
+            window.removeEventListener('database-sync-status', handleSyncStatus);
+            window.removeEventListener('database-synced', handleSynced);
+        };
+    }, []);
 
     const handleSaveDatabaseBackend = async () => {
         try {
@@ -103,11 +153,61 @@ export default function Settings({ currentUser }) {
             await store.set('turso_url', tursoUrl);
             await store.set('turso_token', tursoToken);
             await store.save();
+
+            await saveSyncConfig({
+                workerUrl: syncWorkerUrl,
+                workerSecret: syncWorkerSecret
+            });
+
             alert("Database backend configuration saved. The application will now restart to apply changes.");
             window.location.reload();
         } catch (e) {
             console.error("Failed to save database backend:", e);
             alert("Failed to save configuration.");
+        }
+    };
+
+    const handleSaveWorkerSettings = async () => {
+        setSavingWorker(true);
+        try {
+            await saveSyncConfig({
+                workerUrl: syncWorkerUrl,
+                workerSecret: syncWorkerSecret
+            });
+            alert("Cloudflare Worker sync configuration saved successfully.");
+        } catch (e) {
+            console.error("Failed to save worker configuration:", e);
+            alert("Failed to save worker configuration: " + e);
+        } finally {
+            setSavingWorker(false);
+        }
+    };
+
+    const handleManualSync = async () => {
+        setIsSyncing(true);
+        try {
+            const res = await triggerFullSync(true);
+            if (res.success) {
+                alert(`Sync completed successfully! (Replayed: ${res.result?.replayed_count || 0}, Pending left: ${res.result?.remaining_pending || 0})`);
+            } else if (res.skipped) {
+                alert("Sync skipped: " + res.reason);
+            } else {
+                alert("Sync failed: " + (res.error || 'Unknown error'));
+            }
+        } catch (e) {
+            alert("Sync failed: " + e);
+        } finally {
+            setIsSyncing(false);
+            const stats = await getQueueStats();
+            setQueueStats(stats);
+        }
+    };
+
+    const handleCopyDeviceId = () => {
+        if (deviceId) {
+            navigator.clipboard.writeText(deviceId);
+            setCopiedDeviceId(true);
+            setTimeout(() => setCopiedDeviceId(false), 2000);
         }
     };
 
@@ -539,26 +639,132 @@ export default function Settings({ currentUser }) {
                 </div>
 
                 {dbType === 'turso' && (
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', marginBottom: '16px', background: 'var(--surface-color)', padding: '16px', borderRadius: '6px', border: '1px solid var(--border-color)' }}>
-                        <div>
-                            <label className="form-label" style={{ fontWeight: 'bold' }}>Turso Database URL</label>
-                            <input
-                                type="text"
-                                className="form-input"
-                                value={tursoUrl}
-                                onChange={e => setTursoUrl(e.target.value)}
-                                placeholder="libsql://your-db-url.turso.io"
-                            />
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', marginBottom: '16px' }}>
+                        {/* Turso Connection Parameters */}
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', background: 'var(--surface-color)', padding: '16px', borderRadius: '6px', border: '1px solid var(--border-color)' }}>
+                            <h4 style={{ margin: '0 0 4px 0', fontSize: '0.95rem' }}>Turso Replica Credentials</h4>
+                            <div>
+                                <label className="form-label" style={{ fontWeight: 'bold' }}>Turso Database URL</label>
+                                <input
+                                    type="text"
+                                    className="form-input"
+                                    value={tursoUrl}
+                                    onChange={e => setTursoUrl(e.target.value)}
+                                    placeholder="libsql://your-db-url.turso.io"
+                                />
+                            </div>
+                            <div>
+                                <label className="form-label" style={{ fontWeight: 'bold' }}>Auth Token</label>
+                                <input
+                                    type="password"
+                                    className="form-input"
+                                    value={tursoToken}
+                                    onChange={e => setTursoToken(e.target.value)}
+                                    placeholder="ey..."
+                                />
+                            </div>
                         </div>
-                        <div>
-                            <label className="form-label" style={{ fontWeight: 'bold' }}>Auth Token</label>
-                            <input
-                                type="password"
-                                className="form-input"
-                                value={tursoToken}
-                                onChange={e => setTursoToken(e.target.value)}
-                                placeholder="ey..."
-                            />
+
+                        {/* Cloudflare Worker Sync Parameters */}
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', background: 'var(--surface-color)', padding: '16px', borderRadius: '6px', border: '1px solid var(--border-color)' }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                <h4 style={{ margin: 0, fontSize: '0.95rem' }}>Cloudflare Worker Sync Settings</h4>
+                                <button
+                                    type="button"
+                                    onClick={handleSaveWorkerSettings}
+                                    disabled={savingWorker}
+                                    className="btn-secondary"
+                                    style={{ padding: '4px 12px', fontSize: '0.8rem', display: 'flex', alignItems: 'center', gap: '6px' }}
+                                >
+                                    <Save size={14} /> {savingWorker ? 'Saving...' : 'Save Worker Settings'}
+                                </button>
+                            </div>
+                            <div>
+                                <label className="form-label" style={{ fontWeight: 'bold' }}>Worker Endpoint URL</label>
+                                <input
+                                    type="text"
+                                    className="form-input"
+                                    value={syncWorkerUrl}
+                                    onChange={e => setSyncWorkerUrl(e.target.value)}
+                                    placeholder="https://your-worker.your-account.workers.dev/sync"
+                                />
+                            </div>
+                            <div>
+                                <label className="form-label" style={{ fontWeight: 'bold' }}>Worker Secret Token / API Key</label>
+                                <input
+                                    type="password"
+                                    className="form-input"
+                                    value={syncWorkerSecret}
+                                    onChange={e => setSyncWorkerSecret(e.target.value)}
+                                    placeholder="Secret token for Worker authentication"
+                                />
+                            </div>
+                            <div>
+                                <label className="form-label" style={{ fontWeight: 'bold' }}>Device ID (Client ULID)</label>
+                                <div style={{ display: 'flex', gap: '8px' }}>
+                                    <input
+                                        type="text"
+                                        className="form-input"
+                                        value={deviceId}
+                                        readOnly
+                                        style={{ backgroundColor: 'var(--surface-hover, #f1f5f9)', cursor: 'default' }}
+                                    />
+                                    <button
+                                        type="button"
+                                        onClick={handleCopyDeviceId}
+                                        className="btn-secondary"
+                                        style={{ padding: '0 14px', display: 'flex', alignItems: 'center', gap: '6px' }}
+                                        title="Copy Device ID"
+                                    >
+                                        {copiedDeviceId ? <Check size={16} color="green" /> : <Copy size={16} />}
+                                        {copiedDeviceId ? 'Copied' : 'Copy'}
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* Sync Status & Offline Queue Monitoring */}
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', background: 'var(--surface-color)', padding: '16px', borderRadius: '6px', border: '1px solid var(--border-color)' }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                <h4 style={{ margin: 0, fontSize: '0.95rem' }}>Sync & Offline Queue Status</h4>
+                                <button
+                                    type="button"
+                                    onClick={handleManualSync}
+                                    disabled={isSyncing}
+                                    className="btn-primary"
+                                    style={{ padding: '6px 14px', fontSize: '0.85rem' }}
+                                >
+                                    <RefreshCw size={14} className={isSyncing ? 'spin-animation' : ''} />
+                                    {isSyncing ? 'Syncing...' : 'Sync Now'}
+                                </button>
+                            </div>
+
+                            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '12px' }}>
+                                <div style={{ padding: '10px 14px', borderRadius: '6px', background: 'var(--bg-color)', border: '1px solid var(--border-color)' }}>
+                                    <div style={{ fontSize: '0.8rem', color: '#64748b' }}>Pending Actions</div>
+                                    <div style={{ fontSize: '1.2rem', fontWeight: 600, color: queueStats.pending_count > 0 ? '#3b82f6' : 'var(--text-color)' }}>
+                                        {queueStats.pending_count}
+                                    </div>
+                                </div>
+                                <div style={{ padding: '10px 14px', borderRadius: '6px', background: 'var(--bg-color)', border: '1px solid var(--border-color)' }}>
+                                    <div style={{ fontSize: '0.8rem', color: '#64748b' }}>Failed Actions</div>
+                                    <div style={{ fontSize: '1.2rem', fontWeight: 600, color: queueStats.failed_count > 0 ? '#ef4444' : 'var(--text-color)' }}>
+                                        {queueStats.failed_count}
+                                    </div>
+                                </div>
+                                <div style={{ padding: '10px 14px', borderRadius: '6px', background: 'var(--bg-color)', border: '1px solid var(--border-color)' }}>
+                                    <div style={{ fontSize: '0.8rem', color: '#64748b' }}>Last Synchronized</div>
+                                    <div style={{ fontSize: '0.85rem', fontWeight: 500, marginTop: '4px' }}>
+                                        {lastSyncInfo.time ? new Date(lastSyncInfo.time).toLocaleTimeString() : 'Not yet synced'}
+                                    </div>
+                                </div>
+                            </div>
+
+                            {lastSyncInfo.error && (
+                                <div style={{ padding: '8px 12px', borderRadius: '6px', background: '#fee2e2', color: '#b91c1c', fontSize: '0.85rem' }}>
+                                    <strong>Last Sync Warning:</strong> {lastSyncInfo.error}
+                                </div>
+                            )}
                         </div>
                     </div>
                 )}

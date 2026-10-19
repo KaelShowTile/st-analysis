@@ -23,7 +23,8 @@
     "papaparse": "^5.5.3",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
-    "recharts": "^3.9.2"
+    "recharts": "^3.9.2",
+    "ulid": "^3.0.2"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2",

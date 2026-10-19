@@ -126,6 +126,9 @@ export default function Inventory({ currentUser }) {
 
     useEffect(() => {
         loadData(true);
+        const handleSync = () => loadData(false);
+        window.addEventListener('database-synced', handleSync);
+        return () => window.removeEventListener('database-synced', handleSync);
     }, []);
 
 
@@ -338,6 +341,9 @@ export default function Inventory({ currentUser }) {
         try {
             const db = await getDb();
             await db.execute('DELETE FROM inventory');
+            if (db.sync) {
+                await db.sync();
+            }
             loadData();
         } catch (err) {
             console.error("Failed to clear data", err);

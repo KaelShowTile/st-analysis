@@ -30,7 +30,12 @@ export default function Customers({ currentUser }) {
         }
     };
 
-    useEffect(() => { loadData(true); }, []);
+    useEffect(() => { 
+        loadData(true); 
+        const handleSync = () => loadData(false);
+        window.addEventListener('database-synced', handleSync);
+        return () => window.removeEventListener('database-synced', handleSync);
+    }, []);
 
     const handleDelete = async (c) => {
         const label = c.company || joinParts(c.first_name, c.last_name) || `#${c.customer_id}`;

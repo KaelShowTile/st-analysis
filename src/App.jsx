@@ -17,6 +17,7 @@ import Login from './pages/Login';
 import CostReport from './pages/CostReport';
 import Customers from './pages/Customers';
 import { fetchProductFeeds } from './utils/productFeeds';
+import { initSyncService, triggerFullSync } from './utils/syncService';
 
 function App() {
   const [activeTab, setActiveTab] = useState('dashboard');
@@ -109,6 +110,8 @@ function App() {
         } catch (e) { }
 
         setDbReady(true);
+        initSyncService();
+        triggerFullSync();
       } catch (err) {
         console.error("Failed to initialize DB:", err);
         setDbError(true);
