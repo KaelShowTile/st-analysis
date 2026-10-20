@@ -138,6 +138,7 @@ export const triggerFullSync = async (force = false) => {
                             seq_id: a.seq_id,
                             sql_text: a.sql_text,
                             args: parsedArgs,
+                            args_json: a.args_json,
                             created_at: a.created_at
                         };
                     })
@@ -158,14 +159,15 @@ export const triggerFullSync = async (force = false) => {
                 if (!response.ok) {
                     const errText = await response.text();
                     console.error("[Sync] Worker push failed with status " + response.status + ":", errText);
-                    if (response.status === 400) {
+                    if (response.status === 422 || response.status === 400) {
                         // Poison pill detection: mark problematic action as failed so queue isn't blocked forever
                         try {
                             const errJson = JSON.parse(errText);
                             const failedSeq = errJson.failed_seq_id || pendingActions[0].seq_id;
+                            const errMsg = errJson.error_message || errJson.error || errText;
                             await invoke('mark_queue_failed', { 
                                 seqId: failedSeq, 
-                                errorMsg: errJson.error || errText 
+                                errorMsg: errMsg 
                             });
                         } catch (pe) {
                             await invoke('mark_queue_failed', { 
