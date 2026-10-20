@@ -7,9 +7,9 @@ import { Trash2, Plus, Download, Upload, DatabaseBackup, RotateCcw, FolderOpen, 
 import { appDataDir, join, dirname } from '@tauri-apps/api/path';
 import { readDir, copyFile, exists, mkdir } from '@tauri-apps/plugin-fs';
 import { load } from '@tauri-apps/plugin-store';
-import { getSyncConfig, saveSyncConfig, getQueueStats, triggerFullSync } from '../utils/syncService';
+import { getSyncConfig, saveSyncConfig, getQueueStats, triggerFullSync, testWorkerConnection } from '../utils/syncService';
 
-export default function Settings({ currentUser }) {
+export default function Settings({ currentUser, isActive }) {
     const [attributes, setAttributes] = useState([]);
     const [newType, setNewType] = useState('colour');
     const [newValue, setNewValue] = useState('');
@@ -27,6 +27,8 @@ export default function Settings({ currentUser }) {
     const [isSyncing, setIsSyncing] = useState(false);
     const [lastSyncInfo, setLastSyncInfo] = useState({ time: null, success: null, error: null });
     const [savingWorker, setSavingWorker] = useState(false);
+    const [testingWorker, setTestingWorker] = useState(false);
+    const [workerTestResult, setWorkerTestResult] = useState(null);
     const [maxContainerTracking, setMaxContainerTracking] = useState(50);
     const [timezone, setTimezone] = useState(Intl.DateTimeFormat().resolvedOptions().timeZone);
     const [findTeuApi, setFindTeuApi] = useState('https://findteu.showtile-apis.workers.dev/api');
@@ -70,48 +72,60 @@ export default function Settings({ currentUser }) {
     });
 
     const loadDbPath = async () => {
-        const store = await load('settings.json', { autoSave: false });
+        try {
+            const store = await load('settings.json', { autoSave: false });
 
-        const type = await store.get('db_type');
-        setDbType(type || 'sqlite');
-        const url = await store.get('turso_url');
-        setTursoUrl(url || '');
-        const token = await store.get('turso_token');
-        setTursoToken(token || '');
+            const type = await store.get('db_type');
+            setDbType(type || 'sqlite');
+            const url = await store.get('turso_url');
+            setTursoUrl(url || '');
+            const token = await store.get('turso_token');
+            setTursoToken(token || '');
 
-        const path = await getDbPath();
-        if (path) {
-            setCurrentDbPath(path);
-        } else {
-            const appDir = await appDataDir();
-            setCurrentDbPath(await join(appDir, 'inventory.db'));
+            const path = await getDbPath();
+            if (path) {
+                setCurrentDbPath(path);
+            } else {
+                const appDir = await appDataDir();
+                setCurrentDbPath(await join(appDir, 'inventory.db'));
+            }
+
+            const maxTracking = await store.get('max_container_tracking');
+            if (maxTracking !== undefined) {
+                setMaxContainerTracking(parseInt(maxTracking, 10));
+            }
+            
+            setChtEndpoint(await store.get('cht_endpoint') || '');
+            setChtKey(await store.get('cht_key') || '');
+            setChtFeed(await store.get('cht_feed') || '');
+
+            setStEndpoint(await store.get('st_endpoint') || '');
+            setStKey(await store.get('st_key') || '');
+            setStFeed(await store.get('st_feed') || '');
+
+            setGtoEndpoint(await store.get('gto_endpoint') || '');
+            setGtoKey(await store.get('gto_key') || '');
+            setGtoFeed(await store.get('gto_feed') || '');
+
+            const syncConf = await getSyncConfig();
+            setSyncWorkerUrl(syncConf.workerUrl || '');
+            setSyncWorkerSecret(syncConf.workerSecret || '');
+            setDeviceId(syncConf.deviceId || '');
+
+            const qStats = await getQueueStats();
+            setQueueStats(qStats);
+        } catch (err) {
+            console.error("Failed to load DB settings in Settings.jsx:", err);
         }
-
-        const maxTracking = await store.get('max_container_tracking');
-        if (maxTracking !== undefined) {
-            setMaxContainerTracking(parseInt(maxTracking, 10));
-        }
-        
-        setChtEndpoint(await store.get('cht_endpoint') || '');
-        setChtKey(await store.get('cht_key') || '');
-        setChtFeed(await store.get('cht_feed') || '');
-
-        setStEndpoint(await store.get('st_endpoint') || '');
-        setStKey(await store.get('st_key') || '');
-        setStFeed(await store.get('st_feed') || '');
-
-        setGtoEndpoint(await store.get('gto_endpoint') || '');
-        setGtoKey(await store.get('gto_key') || '');
-        setGtoFeed(await store.get('gto_feed') || '');
-
-        const syncConf = await getSyncConfig();
-        setSyncWorkerUrl(syncConf.workerUrl || '');
-        setSyncWorkerSecret(syncConf.workerSecret || '');
-        setDeviceId(syncConf.deviceId || '');
-
-        const qStats = await getQueueStats();
-        setQueueStats(qStats);
     };
+
+    useEffect(() => {
+        if (isActive) {
+            loadDbPath();
+            loadDbSettings();
+            getQueueStats().then(setQueueStats);
+        }
+    }, [isActive]);
 
     useEffect(() => {
         const handleSyncStatus = (e) => {
@@ -169,17 +183,53 @@ export default function Settings({ currentUser }) {
 
     const handleSaveWorkerSettings = async () => {
         setSavingWorker(true);
+        setWorkerTestResult(null);
         try {
-            await saveSyncConfig({
+            const saved = await saveSyncConfig({
                 workerUrl: syncWorkerUrl,
                 workerSecret: syncWorkerSecret
             });
-            alert("Cloudflare Worker sync configuration saved successfully.");
+            setSyncWorkerUrl(saved.workerUrl);
+            setSyncWorkerSecret(saved.workerSecret);
+
+            try {
+                const res = await testWorkerConnection(saved.workerUrl, saved.workerSecret);
+                setWorkerTestResult({
+                    success: true,
+                    message: `Settings saved successfully! Connected to Worker (${res.health?.service || 'st-erp-sync'}). Turso Cloud: ${res.health?.turso || 'connected'}. Auth verified.`
+                });
+            } catch (testErr) {
+                setWorkerTestResult({
+                    success: false,
+                    message: `Settings saved to disk, but connection test failed: ${testErr?.message || testErr}`
+                });
+            }
         } catch (e) {
             console.error("Failed to save worker configuration:", e);
-            alert("Failed to save worker configuration: " + e);
+            alert("Failed to save worker configuration: " + (e?.message || e));
         } finally {
             setSavingWorker(false);
+            const stats = await getQueueStats();
+            setQueueStats(stats);
+        }
+    };
+
+    const handleTestWorkerConnection = async () => {
+        setTestingWorker(true);
+        setWorkerTestResult(null);
+        try {
+            const res = await testWorkerConnection(syncWorkerUrl, syncWorkerSecret);
+            setWorkerTestResult({
+                success: true,
+                message: `Connection Verified! Worker (${res.health?.service || 'st-erp-sync'}) reachable. Turso Cloud: ${res.health?.turso || 'connected'}. Auth token valid.`
+            });
+        } catch (e) {
+            setWorkerTestResult({
+                success: false,
+                message: e?.message || String(e)
+            });
+        } finally {
+            setTestingWorker(false);
         }
     };
 
@@ -666,18 +716,14 @@ export default function Settings({ currentUser }) {
                         </div>
 
                         {/* Cloudflare Worker Sync Parameters */}
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', background: 'var(--surface-color)', padding: '16px', borderRadius: '6px', border: '1px solid var(--border-color)' }}>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '14px', background: 'var(--surface-color)', padding: '16px', borderRadius: '6px', border: '1px solid var(--border-color)' }}>
                             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                                <h4 style={{ margin: 0, fontSize: '0.95rem' }}>Cloudflare Worker Sync Settings</h4>
-                                <button
-                                    type="button"
-                                    onClick={handleSaveWorkerSettings}
-                                    disabled={savingWorker}
-                                    className="btn-secondary"
-                                    style={{ padding: '4px 12px', fontSize: '0.8rem', display: 'flex', alignItems: 'center', gap: '6px' }}
-                                >
-                                    <Save size={14} /> {savingWorker ? 'Saving...' : 'Save Worker Settings'}
-                                </button>
+                                <div>
+                                    <h4 style={{ margin: 0, fontSize: '0.95rem' }}>Cloudflare Worker Sync Settings</h4>
+                                    <p className="subtitle" style={{ margin: '2px 0 0 0', fontSize: '0.8rem' }}>
+                                        Push local offline queue events to cloud gateway for batch commit to Turso
+                                    </p>
+                                </div>
                             </div>
                             <div>
                                 <label className="form-label" style={{ fontWeight: 'bold' }}>Worker Endpoint URL</label>
@@ -686,8 +732,11 @@ export default function Settings({ currentUser }) {
                                     className="form-input"
                                     value={syncWorkerUrl}
                                     onChange={e => setSyncWorkerUrl(e.target.value)}
-                                    placeholder="https://your-worker.your-account.workers.dev/sync"
+                                    placeholder="https://st-erp-sync.showtile-apis.workers.dev/api/sync/push"
                                 />
+                                <span style={{ fontSize: '0.75rem', color: '#64748b' }}>
+                                    Default endpoint: <code>https://st-erp-sync.showtile-apis.workers.dev/api/sync/push</code>
+                                </span>
                             </div>
                             <div>
                                 <label className="form-label" style={{ fontWeight: 'bold' }}>Worker Secret Token / API Key</label>
@@ -721,6 +770,41 @@ export default function Settings({ currentUser }) {
                                     </button>
                                 </div>
                             </div>
+
+                            {/* Action Buttons: Save & Test Connection */}
+                            <div style={{ display: 'flex', gap: '10px', alignItems: 'center', marginTop: '4px' }}>
+                                <button
+                                    type="button"
+                                    onClick={handleSaveWorkerSettings}
+                                    disabled={savingWorker}
+                                    className="btn-primary"
+                                    style={{ padding: '7px 16px', fontSize: '0.85rem', display: 'flex', alignItems: 'center', gap: '6px' }}
+                                >
+                                    <Save size={15} /> {savingWorker ? 'Saving...' : 'Save Worker Settings'}
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={handleTestWorkerConnection}
+                                    disabled={testingWorker}
+                                    className="btn-secondary"
+                                    style={{ padding: '7px 16px', fontSize: '0.85rem', display: 'flex', alignItems: 'center', gap: '6px' }}
+                                >
+                                    <Check size={15} /> {testingWorker ? 'Testing...' : 'Test Connection'}
+                                </button>
+                            </div>
+
+                            {workerTestResult && (
+                                <div style={{
+                                    padding: '10px 14px',
+                                    borderRadius: '6px',
+                                    fontSize: '0.85rem',
+                                    background: workerTestResult.success ? '#dcfce7' : '#fee2e2',
+                                    color: workerTestResult.success ? '#15803d' : '#b91c1c',
+                                    border: `1px solid ${workerTestResult.success ? '#86efac' : '#fca5a5'}`
+                                }}>
+                                    <strong>{workerTestResult.success ? '✓ Connection Verified:' : '✗ Connection Failed:'}</strong> {workerTestResult.message}
+                                </div>
+                            )}
                         </div>
 
                         {/* Sync Status & Offline Queue Monitoring */}

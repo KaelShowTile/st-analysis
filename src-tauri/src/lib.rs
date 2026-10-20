@@ -180,31 +180,36 @@ async fn mirror_select(
     query: String, 
     args: Vec<JsonValue>
 ) -> Result<Vec<serde_json::Map<String, JsonValue>>, String> {
-    let conn_guard = state.mirror_conn.lock().await;
-    let conn = conn_guard.as_ref().ok_or("No mirror connection")?;
-    
     let libsql_args = json_to_libsql(args);
-    let mut rows = conn.query(&query, libsql_args).await.map_err(|e| e.to_string())?;
-    
-    let mut result = Vec::new();
-    while let Some(row) = rows.next().await.map_err(|e| e.to_string())? {
-        let mut map = serde_json::Map::new();
-        for i in 0..row.column_count() {
-            let name = row.column_name(i).unwrap_or("").to_string();
-            let value = row.get_value(i).map_err(|e| e.to_string())?;
-            let json_value = match value {
-                LibsqlValue::Null => JsonValue::Null,
-                LibsqlValue::Integer(i) => JsonValue::Number(serde_json::Number::from(i)),
-                LibsqlValue::Real(f) => serde_json::Number::from_f64(f).map(JsonValue::Number).unwrap_or(JsonValue::Null),
-                LibsqlValue::Text(t) => JsonValue::String(t),
-                LibsqlValue::Blob(_) => JsonValue::String("blob".to_string()),
-            };
-            map.insert(name, json_value);
+    for _ in 0..10 {
+        let conn_guard = state.mirror_conn.lock().await;
+        if let Some(conn) = conn_guard.as_ref() {
+            let mut rows = conn.query(&query, libsql_args).await.map_err(|e| e.to_string())?;
+            
+            let mut result = Vec::new();
+            while let Some(row) = rows.next().await.map_err(|e| e.to_string())? {
+                let mut map = serde_json::Map::new();
+                for i in 0..row.column_count() {
+                    let name = row.column_name(i).unwrap_or("").to_string();
+                    let value = row.get_value(i).map_err(|e| e.to_string())?;
+                    let json_value = match value {
+                        LibsqlValue::Null => JsonValue::Null,
+                        LibsqlValue::Integer(i) => JsonValue::Number(serde_json::Number::from(i)),
+                        LibsqlValue::Real(f) => serde_json::Number::from_f64(f).map(JsonValue::Number).unwrap_or(JsonValue::Null),
+                        LibsqlValue::Text(t) => JsonValue::String(t),
+                        LibsqlValue::Blob(_) => JsonValue::String("blob".to_string()),
+                    };
+                    map.insert(name, json_value);
+                }
+                result.push(map);
+            }
+            return Ok(result);
         }
-        result.push(map);
+        drop(conn_guard);
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     }
     
-    Ok(result)
+    Err("No mirror connection".to_string())
 }
 
 #[tauri::command]
@@ -235,15 +240,19 @@ async fn mirror_execute(
         }
     }
 
-    // 2. Execute on mirror.db
-    let changed = {
+    // 2. Execute on mirror.db (with retry if mirror is reconnecting)
+    for _ in 0..10 {
         let m_guard = state.mirror_conn.lock().await;
-        let m_conn = m_guard.as_ref().ok_or("No mirror connection")?;
-        let libsql_args = json_to_libsql(args);
-        m_conn.execute(&query, libsql_args).await.map_err(|e| format!("Failed to execute on mirror: {}", e))?
-    };
+        if let Some(m_conn) = m_guard.as_ref() {
+            let libsql_args = json_to_libsql(args.clone());
+            let changed = m_conn.execute(&query, libsql_args).await.map_err(|e| format!("Failed to execute on mirror: {}", e))?;
+            return Ok(changed);
+        }
+        drop(m_guard);
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
 
-    Ok(changed)
+    Err("No mirror connection".to_string())
 }
 
 // Aliases for seamless backward compatibility

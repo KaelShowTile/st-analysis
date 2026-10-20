@@ -56,24 +56,140 @@ export const getSyncConfig = async () => {
     return { dbType, workerUrl, workerSecret, deviceId };
 };
 
+const BROWSER_USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36 ShowTile/1.0';
+
+/**
+ * Normalize Cloudflare Worker sync endpoint URL
+ */
+export const normalizeWorkerUrl = (url) => {
+    if (!url) return '';
+    let clean = url.trim();
+    if (!clean) return '';
+    if (!/^https?:\/\//i.test(clean)) {
+        clean = 'https://' + clean;
+    }
+    clean = clean.replace(/\/+$/, '');
+    if (!clean.includes('/api/sync') && !clean.includes('/sync')) {
+        clean = clean + '/api/sync/push';
+    }
+    return clean;
+};
+
 /**
  * Save Cloudflare Worker sync configuration to settings table & store
  */
 export const saveSyncConfig = async ({ workerUrl, workerSecret }) => {
     try {
-        // Save to SQLite settings table
-        await setSetting('sync_worker_url', workerUrl);
-        await setSetting('sync_worker_secret', workerSecret);
+        const cleanUrl = normalizeWorkerUrl(workerUrl);
+        const cleanSecret = (workerSecret || '').trim();
 
-        // Also save to settings.json for early availability
+        // 1. Save to settings.json for early availability and disk persistence
         const store = await load('settings.json', { autoSave: false });
-        await store.set('sync_worker_url', workerUrl);
-        await store.set('sync_worker_secret', workerSecret);
+        await store.set('sync_worker_url', cleanUrl);
+        await store.set('sync_worker_secret', cleanSecret);
         await store.save();
+
+        // 2. Also save to SQLite settings table (mirror.db)
+        try {
+            await setSetting('sync_worker_url', cleanUrl);
+            await setSetting('sync_worker_secret', cleanSecret);
+        } catch (dbErr) {
+            console.warn("Could not save sync config to DB settings table immediately:", dbErr);
+        }
+
+        return { workerUrl: cleanUrl, workerSecret: cleanSecret };
     } catch (e) {
         console.error("Failed to save sync config:", e);
         throw e;
     }
+};
+
+/**
+ * Test connection to Cloudflare Worker endpoint and verify Turso connectivity & authentication
+ */
+export const testWorkerConnection = async (customUrl, customSecret) => {
+    const { workerUrl: savedUrl, workerSecret: savedSecret } = await getSyncConfig();
+    const targetUrl = customUrl ? normalizeWorkerUrl(customUrl) : savedUrl;
+    const targetSecret = customSecret !== undefined ? (customSecret || '').trim() : savedSecret;
+
+    if (!targetUrl) {
+        throw new Error("Worker endpoint URL is required.");
+    }
+
+    let baseUrl = targetUrl;
+    if (baseUrl.endsWith('/api/sync/push')) {
+        baseUrl = baseUrl.replace(/\/api\/sync\/push$/, '');
+    } else if (baseUrl.endsWith('/sync/push')) {
+        baseUrl = baseUrl.replace(/\/sync\/push$/, '');
+    } else if (baseUrl.endsWith('/sync')) {
+        baseUrl = baseUrl.replace(/\/sync$/, '');
+    } else if (baseUrl.endsWith('/api/sync')) {
+        baseUrl = baseUrl.replace(/\/api\/sync$/, '');
+    }
+    baseUrl = baseUrl.replace(/\/+$/, '');
+
+    const healthUrl = `${baseUrl}/api/health`;
+    const pushUrl = targetUrl;
+
+    // 1. Health & reachability check
+    let healthData = null;
+    try {
+        const hResp = await tauriFetch(healthUrl, {
+            method: 'GET',
+            headers: { 'User-Agent': BROWSER_USER_AGENT }
+        });
+        if (!hResp.ok) {
+            const errTxt = await hResp.text();
+            throw new Error(`Worker health check failed (${hResp.status}): ${errTxt}`);
+        }
+        healthData = await hResp.json();
+    } catch (he) {
+        // Fallback to window.fetch
+        try {
+            const fbResp = await fetch(healthUrl);
+            if (fbResp.ok) {
+                healthData = await fbResp.json();
+            } else {
+                throw new Error(`Worker health check failed (${fbResp.status})`);
+            }
+        } catch (e2) {
+            throw new Error(`Cannot reach Cloudflare Worker at ${healthUrl}: ${he?.message || he}`);
+        }
+    }
+
+    // 2. Authentication check with empty actions array
+    const pushHeaders = {
+        'Content-Type': 'application/json',
+        'User-Agent': BROWSER_USER_AGENT
+    };
+    if (targetSecret) {
+        pushHeaders['Authorization'] = `Bearer ${targetSecret}`;
+        pushHeaders['x-api-key'] = targetSecret;
+    }
+
+    const pResp = await tauriFetch(pushUrl, {
+        method: 'POST',
+        headers: pushHeaders,
+        body: JSON.stringify({
+            device_id: 'test_probe',
+            actions: []
+        })
+    });
+
+    if (!pResp.ok) {
+        const errTxt = await pResp.text();
+        if (pResp.status === 401) {
+            throw new Error("Worker rejected authentication (401 Unauthorized). Please check your API Secret.");
+        }
+        throw new Error(`Worker push verification failed (${pResp.status}): ${errTxt}`);
+    }
+
+    const pushData = await pResp.json();
+    return {
+        success: true,
+        health: healthData,
+        push: pushData
+    };
 };
 
 /**
@@ -144,13 +260,17 @@ export const triggerFullSync = async (force = false) => {
                     })
                 };
 
-                const headers = { 'Content-Type': 'application/json' };
+                const headers = { 
+                    'Content-Type': 'application/json',
+                    'User-Agent': BROWSER_USER_AGENT
+                };
                 if (workerSecret) {
-                    headers['Authorization'] = `Bearer ${workerSecret}`;
-                    headers['x-api-key'] = workerSecret;
+                    headers['Authorization'] = `Bearer ${workerSecret.trim()}`;
+                    headers['x-api-key'] = workerSecret.trim();
                 }
 
-                const response = await tauriFetch(workerUrl, {
+                const pushEndpoint = normalizeWorkerUrl(workerUrl);
+                const response = await tauriFetch(pushEndpoint, {
                     method: 'POST',
                     headers,
                     body: JSON.stringify(payload)
