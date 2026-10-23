@@ -429,6 +429,33 @@ const initializeTables = async (db) => {
         await db.execute("INSERT INTO settings (key, value) VALUES ('theme', 'system')");
     }
 
+    await db.execute(`
+        CREATE TABLE IF NOT EXISTS invoice (
+            invoice_id INTEGER PRIMARY KEY,
+            invoice_no TEXT,
+            invoice_date TEXT,
+            proforma_invoice_no TEXT,
+            customer_id INTEGER,
+            sale_item_ids TEXT
+        )
+    `);
+
+    await db.execute(`
+        CREATE TABLE IF NOT EXISTS pro_forma_invoice (
+            pro_forma_invoice_id INTEGER PRIMARY KEY,
+            invoice_date TEXT,
+            quotation_invoice_no TEXT,
+            customer_id INTEGER,
+            sale_item_ids TEXT,
+            pro_forma_invoice_no TEXT
+        )
+    `);
+
+    try { await db.execute('CREATE INDEX IF NOT EXISTS idx_invoice_no ON invoice (invoice_no)'); } catch (e) {}
+    try { await db.execute('CREATE INDEX IF NOT EXISTS idx_invoice_proforma_no ON invoice (proforma_invoice_no)'); } catch (e) {}
+    try { await db.execute('CREATE INDEX IF NOT EXISTS idx_invoice_customer_id ON invoice (customer_id)'); } catch (e) {}
+    try { await db.execute('CREATE INDEX IF NOT EXISTS idx_pro_forma_invoice_no ON pro_forma_invoice (pro_forma_invoice_no)'); } catch (e) {}
+
     // Migrations
     try {
         await db.execute('ALTER TABLE inventory ADD COLUMN backorder INTEGER DEFAULT 0');
