@@ -29,6 +29,7 @@ function getInitialProductState() {
         showtile_name: '',
         showtile_product_code: '',
         showtile_price: '',
+        suffix: '',
         cht_name: '',
         cht_regular_price: '',
         cht_sales_price: '',
@@ -71,7 +72,8 @@ export default function ProductModal({
             if (product) {
                 setProductFormData({
                     id: product.product_id,
-                    ...product
+                    ...product,
+                    suffix: product.suffix || ''
                 });
                 setColorInput(product.color || '');
                 setFinishInput(product.finish || '');
@@ -143,7 +145,8 @@ export default function ProductModal({
                         product_id: productFormData.st_id.toString(),
                         finish: productFormData.finish,
                         size: productFormData.size,
-                        price: productFormData.showtile_price.toString()
+                        price: productFormData.showtile_price.toString(),
+                        suffix: (productFormData.suffix || '').toString()
                     }
                 ]
             };
@@ -227,14 +230,14 @@ export default function ProductModal({
                     UPDATE products SET 
                         product_name = $1, product_description = $2, collection_id = $3, shipper_id = $4,
                         color = $5, finish = $6, size = $7, m2_per_box = $8, pcs_per_box = $9, box_per_pallet = $10,
-                        showtile_name = $11, showtile_product_code = $12, showtile_price = $13,
-                        cht_name = $14, cht_regular_price = $15, cht_sales_price = $16, gto_name = $17, gto_regular_price = $18, gto_sales_price = $19, st_id = $20, st_name = $21
-                    WHERE product_id = $22
+                        showtile_name = $11, showtile_product_code = $12, showtile_price = $13, suffix = $14,
+                        cht_name = $15, cht_regular_price = $16, cht_sales_price = $17, gto_name = $18, gto_regular_price = $19, gto_sales_price = $20, st_id = $21, st_name = $22
+                    WHERE product_id = $23
                 `, [
                     productFormData.product_name, productFormData.product_description, productFormData.collection_id, productFormData.shipper_id || null,
                     finalColor, finalFinish, productFormData.size,
                     productFormData.m2_per_box || null, productFormData.pcs_per_box || null, productFormData.box_per_pallet || null,
-                    productFormData.showtile_name, productFormData.showtile_product_code, productFormData.showtile_price || null,
+                    productFormData.showtile_name, productFormData.showtile_product_code, productFormData.showtile_price || null, productFormData.suffix || null,
                     productFormData.cht_name, productFormData.cht_regular_price || null, productFormData.cht_sales_price || null, productFormData.gto_name, productFormData.gto_regular_price || null, productFormData.gto_sales_price || null,
                     productFormData.st_id, productFormData.st_name,
                     productFormData.id
@@ -244,14 +247,14 @@ export default function ProductModal({
                     INSERT INTO products (
                         product_name, product_description, collection_id, shipper_id,
                         color, finish, size, m2_per_box, pcs_per_box, box_per_pallet,
-                        showtile_name, showtile_product_code, showtile_price,
+                        showtile_name, showtile_product_code, showtile_price, suffix,
                         cht_name, cht_regular_price, cht_sales_price, gto_name, gto_regular_price, gto_sales_price, st_id, st_name
-                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)
+                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22)
                 `, [
                     productFormData.product_name, productFormData.product_description, productFormData.collection_id, productFormData.shipper_id || null,
                     finalColor, finalFinish, productFormData.size,
                     productFormData.m2_per_box || null, productFormData.pcs_per_box || null, productFormData.box_per_pallet || null,
-                    productFormData.showtile_name, productFormData.showtile_product_code, productFormData.showtile_price || null,
+                    productFormData.showtile_name, productFormData.showtile_product_code, productFormData.showtile_price || null, productFormData.suffix || null,
                     productFormData.cht_name, productFormData.cht_regular_price || null, productFormData.cht_sales_price || null, productFormData.gto_name, productFormData.gto_regular_price || null, productFormData.gto_sales_price || null,
                     productFormData.st_id, productFormData.st_name
                 ]);
@@ -430,6 +433,10 @@ export default function ProductModal({
                                     <div className="form-group" style={{ margin: 0 }}>
                                         <label style={{ display: 'block', marginBottom: '6px', fontSize: '0.85rem', color: '#475569' }}>Showtile Price</label>
                                         <input type="number" step="0.01" className="form-control" value={productFormData.showtile_price || ''} onChange={e => setProductFormData({ ...productFormData, showtile_price: e.target.value })} style={{ width: '100%', padding: '6px 10px', border: '1px solid #cbd5e1', borderRadius: '4px' }} />
+                                    </div>
+                                    <div className="form-group" style={{ margin: 0 }}>
+                                        <label style={{ display: 'block', marginBottom: '6px', fontSize: '0.85rem', color: '#475569' }}>Unit Suffix</label>
+                                        <input type="text" className="form-control" placeholder="e.g. box, m2" value={productFormData.suffix || ''} onChange={e => setProductFormData({ ...productFormData, suffix: e.target.value })} style={{ width: '100%', padding: '6px 10px', border: '1px solid #cbd5e1', borderRadius: '4px' }} />
                                     </div>
                                     <div className="form-group" style={{ margin: 0 }}>
                                         <label style={{ display: 'block', marginBottom: '6px', fontSize: '0.85rem', color: '#475569' }}>m2 / box</label>

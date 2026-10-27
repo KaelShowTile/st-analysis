@@ -3,6 +3,7 @@ use tokio::sync::Mutex;
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use libsql::{Builder, Connection, Database, Value as LibsqlValue};
+use tauri::Emitter;
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct QueueAction {
@@ -60,6 +61,7 @@ fn json_to_libsql(args: Vec<JsonValue>) -> Vec<LibsqlValue> {
 
 #[tauri::command]
 async fn init_sync_architecture(
+    app: tauri::AppHandle,
     state: tauri::State<'_, DbState>,
     replica_path: String,
     mirror_path: String,
@@ -67,6 +69,8 @@ async fn init_sync_architecture(
     url: String,
     token: String,
 ) -> Result<(), String> {
+    let _ = app.emit("init-progress", "Initializing system...");
+
     // 1. Initialize queue.db
     let queue_db = Builder::new_local(&queue_path)
         .build()
@@ -92,6 +96,7 @@ async fn init_sync_architecture(
     ).await;
 
     // 2. Initialize replica.db
+    let _ = app.emit("init-progress", "Checking for remote database updates...");
     let replica_exists = std::path::Path::new(&replica_path).exists();
     let replica_db = Builder::new_remote_replica(&replica_path, url, token)
         .sync_protocol(libsql::SyncProtocol::V2)
@@ -100,6 +105,7 @@ async fn init_sync_architecture(
         .map_err(|e| format!("Failed to build replica db: {}", e))?;
 
     // Attempt initial sync on replica
+    let _ = app.emit("init-progress", "Synchronizing local database...");
     match replica_db.sync().await {
         Ok(_) => {
             println!("Initial replica sync completed successfully.");
@@ -114,6 +120,7 @@ async fn init_sync_architecture(
     }
 
     // 3. Initialize mirror.db
+    let _ = app.emit("init-progress", "Creating mirror database...");
     let mirror_file = std::path::Path::new(&mirror_path);
     if !mirror_file.exists() && std::path::Path::new(&replica_path).exists() {
         let _ = std::fs::copy(&replica_path, &mirror_path);
@@ -143,6 +150,7 @@ async fn init_sync_architecture(
 
 #[tauri::command]
 async fn init_turso(
+    app: tauri::AppHandle,
     state: tauri::State<'_, DbState>,
     path: String,
     url: String,
@@ -153,14 +161,16 @@ async fn init_turso(
     let mirror_path = parent.join("mirror.db").to_str().unwrap_or("mirror.db").to_string();
     let queue_path = parent.join("queue.db").to_str().unwrap_or("queue.db").to_string();
 
-    init_sync_architecture(state, path, mirror_path, queue_path, url, token).await
+    init_sync_architecture(app, state, path, mirror_path, queue_path, url, token).await
 }
 
 #[tauri::command]
 async fn init_local(
+    app: tauri::AppHandle,
     state: tauri::State<'_, DbState>,
     path: String,
 ) -> Result<(), String> {
+    let _ = app.emit("init-progress", "Initializing local database...");
     let mirror_db = Builder::new_local(&path)
         .build()
         .await

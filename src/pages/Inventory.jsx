@@ -496,16 +496,16 @@ export default function Inventory({ currentUser }) {
                     <table className="data-table">
                         <thead>
                             <tr>
-                                <th style={{ maxWidth: '200px', cursor: 'pointer' }} onClick={() => handleSort('sales_description')}>Description {sortConfig.key === 'sales_description' ? (sortConfig.direction === 'asc' ? '↑' : '↓') : ''}</th>
-                                <th style={{ cursor: 'pointer' }} onClick={() => handleSort('sku')}>SKU {sortConfig.key === 'sku' ? (sortConfig.direction === 'asc' ? '↑' : '↓') : ''}</th>
-                                <th style={{ cursor: 'pointer' }} onClick={() => handleSort('extracted_name')}>Extracted Name {sortConfig.key === 'extracted_name' ? (sortConfig.direction === 'asc' ? '↑' : '↓') : ''}</th>
-                                <th style={{ cursor: 'pointer' }} onClick={() => handleSort('extracted_colour')}>Colour {sortConfig.key === 'extracted_colour' ? (sortConfig.direction === 'asc' ? '↑' : '↓') : ''}</th>
-                                <th style={{ cursor: 'pointer' }} onClick={() => handleSort('extracted_finish')}>Finish {sortConfig.key === 'extracted_finish' ? (sortConfig.direction === 'asc' ? '↑' : '↓') : ''}</th>
-                                <th style={{ cursor: 'pointer' }} onClick={() => handleSort('extracted_size')}>Size {sortConfig.key === 'extracted_size' ? (sortConfig.direction === 'asc' ? '↑' : '↓') : ''}</th>
-                                <th className="num" style={{ cursor: 'pointer' }} onClick={() => handleSort('available')}>Available Qty {sortConfig.key === 'available' ? (sortConfig.direction === 'asc' ? '↑' : '↓') : ''}</th>
-                                <th className="num" style={{ cursor: 'pointer' }} onClick={() => handleSort('holding')}>Holding {sortConfig.key === 'holding' ? (sortConfig.direction === 'asc' ? '↑' : '↓') : ''}</th>
-                                <th className="num" style={{ cursor: 'pointer' }} onClick={() => handleSort('so_qty')}>SO Qty {sortConfig.key === 'so_qty' ? (sortConfig.direction === 'asc' ? '↑' : '↓') : ''}</th>
-                                <th className="num" style={{ cursor: 'pointer' }} onClick={() => handleSort('total_qty')}>Total Qty {sortConfig.key === 'total_qty' ? (sortConfig.direction === 'asc' ? '↑' : '↓') : ''}</th>
+                                <th style={{ cursor: 'pointer' }} onClick={() => handleSort('sales_description')}>Description {sortConfig.key === 'sales_description' ? (sortConfig.direction === 'asc' ? '↑' : '↓') : ''}</th>
+                                <th style={{ width: '100px', cursor: 'pointer' }} onClick={() => handleSort('sku')}>SKU {sortConfig.key === 'sku' ? (sortConfig.direction === 'asc' ? '↑' : '↓') : ''}</th>
+                                <th style={{ width: '250px', cursor: 'pointer' }} onClick={() => handleSort('extracted_name')}>Extracted Name {sortConfig.key === 'extracted_name' ? (sortConfig.direction === 'asc' ? '↑' : '↓') : ''}</th>
+                                <th style={{ width: '120px', cursor: 'pointer' }} onClick={() => handleSort('extracted_colour')}>Colour {sortConfig.key === 'extracted_colour' ? (sortConfig.direction === 'asc' ? '↑' : '↓') : ''}</th>
+                                <th style={{ width: '120px', cursor: 'pointer' }} onClick={() => handleSort('extracted_finish')}>Finish {sortConfig.key === 'extracted_finish' ? (sortConfig.direction === 'asc' ? '↑' : '↓') : ''}</th>
+                                <th style={{ width: '120px', cursor: 'pointer' }} onClick={() => handleSort('extracted_size')}>Size {sortConfig.key === 'extracted_size' ? (sortConfig.direction === 'asc' ? '↑' : '↓') : ''}</th>
+                                <th className="num" style={{ width: '100px', cursor: 'pointer' }} onClick={() => handleSort('available')}>Available Qty {sortConfig.key === 'available' ? (sortConfig.direction === 'asc' ? '↑' : '↓') : ''}</th>
+                                <th className="num" style={{ width: '100px', cursor: 'pointer' }} onClick={() => handleSort('holding')}>Holding {sortConfig.key === 'holding' ? (sortConfig.direction === 'asc' ? '↑' : '↓') : ''}</th>
+                                <th className="num" style={{ width: '100px', cursor: 'pointer' }} onClick={() => handleSort('so_qty')}>SO Qty {sortConfig.key === 'so_qty' ? (sortConfig.direction === 'asc' ? '↑' : '↓') : ''}</th>
+                                <th className="num" style={{ width: '100px', cursor: 'pointer' }} onClick={() => handleSort('total_qty')}>Total Qty {sortConfig.key === 'total_qty' ? (sortConfig.direction === 'asc' ? '↑' : '↓') : ''}</th>
                             </tr>
                         </thead>
                         <tbody>

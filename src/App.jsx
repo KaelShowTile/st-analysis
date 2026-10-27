@@ -5,6 +5,7 @@ import { appDataDir, join, dirname } from '@tauri-apps/api/path';
 import { copyFile, mkdir, readDir, remove, exists } from '@tauri-apps/plugin-fs';
 import { load } from '@tauri-apps/plugin-store';
 import { fetch as tauriFetch } from '@tauri-apps/plugin-http';
+import { listen } from '@tauri-apps/api/event';
 import './App.css';
 import Dashboard from './pages/Dashboard';
 import Inventory from './pages/Inventory';
@@ -26,6 +27,7 @@ function App() {
   const [theme, setTheme] = useState('light');
   const [dbReady, setDbReady] = useState(false);
   const [dbError, setDbError] = useState(false);
+  const [initStatus, setInitStatus] = useState('Initializing system...');
 
   const [currentUser, setCurrentUser] = useState(() => {
     const saved = localStorage.getItem('currentUser');
@@ -33,10 +35,33 @@ function App() {
   });
 
   useEffect(() => {
+    let unlistenProgress = null;
+    let isMounted = true;
+
+    // Listen to custom window events (dispatched from JS modules)
+    const handleWindowEvent = (e) => {
+      if (isMounted && e.detail) {
+        setInitStatus(e.detail);
+      }
+    };
+    window.addEventListener('init-progress', handleWindowEvent);
+
     const initDb = async () => {
       try {
+        // Listen to Tauri IPC events from Rust
+        try {
+          unlistenProgress = await listen('init-progress', (event) => {
+            if (isMounted && event.payload) {
+              setInitStatus(event.payload);
+            }
+          });
+        } catch (eventErr) {
+          console.warn("Could not attach init-progress listener:", eventErr);
+        }
+
         // Automatic DB Backup
         if (!sessionStorage.getItem('backup_done')) {
+          setInitStatus('Backing up local database...');
           try {
             const appDir = await appDataDir();
             const customDb = await getDbPath();
@@ -76,7 +101,10 @@ function App() {
           }
         }
 
+        setInitStatus('Initializing system...');
         const db = await getDb();
+
+        setInitStatus('Loading user settings...');
         const result = await db.select("SELECT value FROM settings WHERE key = 'theme'");
         if (result.length > 0) {
           const savedTheme = result[0].value;
@@ -85,6 +113,7 @@ function App() {
 
         // Refresh current user permissions from DB to handle newly added permissions
         if (currentUser) {
+          setInitStatus('Checking user permissions...');
           const freshUser = await db.select("SELECT * FROM users WHERE id = $1", [currentUser.id]);
           if (freshUser.length > 0) {
             let updatedPermissions = JSON.parse(freshUser[0].permissions);
@@ -102,6 +131,7 @@ function App() {
           }
         }
 
+        setInitStatus('Loading product feeds...');
         fetchProductFeeds();
 
         try {
@@ -109,6 +139,7 @@ function App() {
           if (tz) window.__USER_TZ__ = tz;
         } catch (e) { }
 
+        setInitStatus('Finalizing startup...');
         setDbReady(true);
         initSyncService();
         triggerFullSync();
@@ -118,6 +149,12 @@ function App() {
       }
     };
     initDb();
+
+    return () => {
+      isMounted = false;
+      window.removeEventListener('init-progress', handleWindowEvent);
+      if (unlistenProgress) unlistenProgress();
+    };
   }, []);
 
   useEffect(() => {
@@ -167,7 +204,7 @@ function App() {
     return (
       <div style={{ display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center', height: '100vh', gap: '16px', color: 'var(--text-color)', backgroundColor: 'var(--bg-color)' }}>
         <Loader2 size={40} className="spin" color="var(--primary-color)" />
-        <div style={{ fontSize: '18px', fontWeight: 500 }}>Initializing System...</div>
+        <div style={{ fontSize: '18px', fontWeight: 500 }}>{initStatus}</div>
       </div>
     );
   }

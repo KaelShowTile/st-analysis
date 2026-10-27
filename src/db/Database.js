@@ -206,8 +206,10 @@ export const getDb = async () => {
                     close: async () => {}
                 };
 
+                window.dispatchEvent(new CustomEvent('init-progress', { detail: 'Setting up database tables...' }));
                 await initializeTables(dbProxy);
                 
+                window.dispatchEvent(new CustomEvent('init-progress', { detail: 'Upgrading database schema...' }));
                 try { await dbProxy.execute('ALTER TABLE containers ADD COLUMN deposit TEXT'); } catch(e) {}
                 try { await dbProxy.execute('ALTER TABLE containers ADD COLUMN balance TEXT'); } catch(e) {}
                 try { await dbProxy.execute('ALTER TABLE containers ADD COLUMN payment_date TEXT'); } catch(e) {}
@@ -303,9 +305,16 @@ const initializeTables = async (db) => {
             cht_and_gto_stock_status TEXT,
             m2_per_box REAL,
             pcs_per_box REAL,
-            box_per_pallet REAL
+            box_per_pallet REAL,
+            st_id TEXT,
+            st_name TEXT,
+            suffix TEXT
         )
     `);
+
+    try { await db.execute("ALTER TABLE products ADD COLUMN st_id TEXT"); } catch (e) { }
+    try { await db.execute("ALTER TABLE products ADD COLUMN st_name TEXT"); } catch (e) { }
+    try { await db.execute("ALTER TABLE products ADD COLUMN suffix TEXT"); } catch (e) { }
 
     await db.execute(`
         CREATE TABLE IF NOT EXISTS attributes (
