@@ -96,33 +96,27 @@ async fn init_sync_architecture(
     ).await;
 
     // 2. Initialize replica.db
-    let _ = app.emit("init-progress", "Checking for remote database updates...");
     let replica_exists = std::path::Path::new(&replica_path).exists();
+    let mirror_file = std::path::Path::new(&mirror_path);
+    let mirror_exists = mirror_file.exists();
+
     let replica_db = Builder::new_remote_replica(&replica_path, url, token)
         .sync_protocol(libsql::SyncProtocol::V2)
         .build()
         .await
         .map_err(|e| format!("Failed to build replica db: {}", e))?;
 
-    // Attempt initial sync on replica
-    let _ = app.emit("init-progress", "Synchronizing local database...");
-    match replica_db.sync().await {
-        Ok(_) => {
-            println!("Initial replica sync completed successfully.");
-        }
-        Err(e) => {
-            if replica_exists {
-                eprintln!("Warning: Initial replica sync failed ({}), proceeding with existing local replica.", e);
-            } else {
-                return Err(format!("Initial replica sync failed: {}", e));
-            }
-        }
+    // Only block on network sync if neither mirror nor replica exists (fresh install)
+    if !mirror_exists && !replica_exists {
+        let _ = app.emit("init-progress", "Downloading initial database...");
+        replica_db.sync().await.map_err(|e| format!("Initial replica sync failed: {}", e))?;
+    } else {
+        println!("Existing local database detected. Skipping blocking sync for instant startup.");
     }
 
     // 3. Initialize mirror.db
     let _ = app.emit("init-progress", "Creating mirror database...");
-    let mirror_file = std::path::Path::new(&mirror_path);
-    if !mirror_file.exists() && std::path::Path::new(&replica_path).exists() {
+    if !mirror_exists && std::path::Path::new(&replica_path).exists() {
         let _ = std::fs::copy(&replica_path, &mirror_path);
     }
 
