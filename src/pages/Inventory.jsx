@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import Papa from 'papaparse';
 import { Upload, Search, Trash2, Edit3, X, Save } from 'lucide-react';
 import { getDb } from '../db/Database';
+import { getLocalTodayStrSync } from '../utils/timezone';
 import './Inventory.css';
 
 
@@ -142,7 +143,7 @@ export default function Inventory({ currentUser }) {
             const finishes = attributes.filter(a => a.type === 'finish').map(a => a.value.toLowerCase());
 
             // Retrieve all rows where extracted_name is empty or null
-            const rows = await db.select("SELECT product_id, sku, sales_description FROM inventory WHERE extracted_name IS NULL OR extracted_name = ''");
+            const rows = await db.select("SELECT product_id, sku, sales_description, product_parent_id FROM inventory WHERE extracted_name IS NULL OR extracted_name = ''");
 
             for (const row of rows) {
                 const salesDesc = String(row.sales_description || '');
@@ -154,6 +155,23 @@ export default function Inventory({ currentUser }) {
                         extracted_size = $4, backorder = $5, backorder_amount = $6 
                     WHERE sku = $7
                 `, [features.extractedName, features.extractedColour, features.extractedFinish, features.extractedSize, features.backorder, features.backorder_amount, row.sku]);
+
+                if (features.backorder === 1) {
+                    try {
+                        const todayStr = getLocalTodayStrSync();
+                        await db.execute(`
+                            INSERT INTO order_batch (product_id, sku, description, amount, created_date)
+                            VALUES ($1, $2, $3, $4, $5)
+                            ON CONFLICT(sku) DO UPDATE SET
+                                product_id = COALESCE(excluded.product_id, order_batch.product_id),
+                                description = excluded.description,
+                                amount = excluded.amount,
+                                created_date = excluded.created_date
+                        `, [row.product_parent_id || null, row.sku, salesDesc, features.backorder_amount, todayStr]);
+                    } catch (obErr) {
+                        console.warn("Failed to sync order_batch in auto analysis:", obErr);
+                    }
+                }
             }
             loadData();
             alert(`Auto Analysis complete. Processed ${rows.length} records.`);
@@ -192,6 +210,8 @@ export default function Inventory({ currentUser }) {
 
                 // Phase 1: Local comparison & filtering (0 remote Turso row reads)
                 const itemsToUpsert = [];
+                const backorderItemsToSync = [];
+                const todayStr = getLocalTodayStrSync();
 
                 for (const row of parsedData) {
                     if (!row['SKU'] || row['SKU'].trim() === '') continue; // skip invalid rows
@@ -280,6 +300,16 @@ export default function Inventory({ currentUser }) {
                         }
                     }
 
+                    if (backorder === 1) {
+                        backorderItemsToSync.push({
+                            sku,
+                            description: sales_desc,
+                            amount: backorder_amount,
+                            product_id: existing?.product_parent_id || null,
+                            created_date: todayStr
+                        });
+                    }
+
                     if (shouldUpdate) {
                         itemsToUpsert.push([
                             sku, stock_no, sales_desc, supplier, available, holding, so_qty, total_qty, rrp, cost,
@@ -319,6 +349,24 @@ export default function Inventory({ currentUser }) {
                     }
                     if (db.sync) {
                         await db.sync();
+                    }
+                }
+                // Phase 3: Sync backorder items to order_batch
+                if (backorderItemsToSync.length > 0) {
+                    for (const b of backorderItemsToSync) {
+                        try {
+                            await db.execute(`
+                                INSERT INTO order_batch (product_id, sku, description, amount, created_date)
+                                VALUES ($1, $2, $3, $4, $5)
+                                ON CONFLICT(sku) DO UPDATE SET
+                                    product_id = COALESCE(excluded.product_id, order_batch.product_id),
+                                    description = excluded.description,
+                                    amount = excluded.amount,
+                                    created_date = excluded.created_date
+                            `, [b.product_id, b.sku, b.description, b.amount, b.created_date]);
+                        } catch (obErr) {
+                            console.warn("Failed to sync order_batch row:", obErr);
+                        }
                     }
                 }
             } catch (innerErr) {

@@ -3,6 +3,7 @@ import ContainerList from './ContainerList';
 import ShipperList from './ShipperList';
 import ContainerReport from './ContainerReport';
 import ShipmentOrders from './ShipmentOrders';
+import PurchaseOrders from './PurchaseOrders';
 import OceanShippers from './OceanShippers';
 import ComingProducts from './ComingProducts';
 import ComingContainers from './ComingContainers';
@@ -15,6 +16,7 @@ export default function Containers({ currentUser, isActive, externalShipmentId, 
     const [subTab, setSubTab] = useState(() => {
         if (p.containerDashboard?.read) return 'report';
         if (p.shipmentOrders?.read) return 'shipments';
+        if (p.purchaseOrders?.read) return 'purchase_orders';
         if (p.containerList?.read) return 'list';
         if (p.comingProducts?.read || p.admin) return 'coming_products';
         if (p.comingContainer?.read || p.admin) return 'coming_containers';
@@ -64,6 +66,14 @@ export default function Containers({ currentUser, isActive, externalShipmentId, 
                         Shipment Orders
                     </button>
                 )}
+                {(p.purchaseOrders?.read ?? p.shipmentOrders?.read ?? p.admin) && (
+                    <button
+                        className={`subnav-btn ${subTab === 'purchase_orders' ? 'active' : ''}`}
+                        onClick={() => setSubTab('purchase_orders')}
+                    >
+                        Purchase Orders
+                    </button>
+                )}
                 {p.containerList?.read && (
                     <button
                         className={`subnav-btn ${subTab === 'list' ? 'active' : ''}`}
@@ -109,6 +119,9 @@ export default function Containers({ currentUser, isActive, externalShipmentId, 
             <div style={{ flex: 1, overflow: 'hidden', display: 'flex' }}>
                 <div style={{ display: subTab === 'shipments' ? 'flex' : 'none', flex: 1 }}>
                     <ShipmentOrders currentUser={currentUser} initialEditId={editShipmentId} onClearEdit={() => setEditShipmentId(null)} isActive={isActive && subTab === 'shipments'} />
+                </div>
+                <div style={{ display: subTab === 'purchase_orders' ? 'flex' : 'none', flex: 1 }}>
+                    <PurchaseOrders currentUser={currentUser} isActive={isActive && subTab === 'purchase_orders'} />
                 </div>
                 <div style={{ display: subTab === 'list' ? 'flex' : 'none', flex: 1 }}>
                     <ContainerList currentUser={currentUser} onNavigateToShipment={handleNavigateToShipment} isActive={isActive && subTab === 'list'} />

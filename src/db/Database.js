@@ -463,7 +463,97 @@ const initializeTables = async (db) => {
     try { await db.execute('CREATE INDEX IF NOT EXISTS idx_invoice_no ON invoice (invoice_no)'); } catch (e) {}
     try { await db.execute('CREATE INDEX IF NOT EXISTS idx_invoice_proforma_no ON invoice (proforma_invoice_no)'); } catch (e) {}
     try { await db.execute('CREATE INDEX IF NOT EXISTS idx_invoice_customer_id ON invoice (customer_id)'); } catch (e) {}
+    try { await db.execute('CREATE INDEX IF NOT EXISTS idx_invoice_no ON invoice (invoice_no)'); } catch (e) {}
+    try { await db.execute('CREATE INDEX IF NOT EXISTS idx_invoice_proforma_no ON invoice (proforma_invoice_no)'); } catch (e) {}
+    try { await db.execute('CREATE INDEX IF NOT EXISTS idx_invoice_customer_id ON invoice (customer_id)'); } catch (e) {}
     try { await db.execute('CREATE INDEX IF NOT EXISTS idx_pro_forma_invoice_no ON pro_forma_invoice (pro_forma_invoice_no)'); } catch (e) {}
+
+    await db.execute(`
+        CREATE TABLE IF NOT EXISTS purchase_orders (
+            order_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            shipper_id INTEGER,
+            invoice_no TEXT,
+            products TEXT,
+            note TEXT,
+            status TEXT DEFAULT 'open',
+            deposit_amount REAL,
+            deposit_exchange_rate REAL,
+            deposit_paid_date TEXT,
+            created_at TEXT
+        )
+    `);
+
+    await db.execute(`
+        CREATE TABLE IF NOT EXISTS shipping_order (
+            shipping_order_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            order_id INTEGER,
+            hbl_no TEXT,
+            forwarder_id INTEGER,
+            est_date TEXT,
+            created_date TEXT,
+            container_id INTEGER,
+            note TEXT
+        )
+    `);
+
+    await db.execute(`
+        CREATE TABLE IF NOT EXISTS order_batch (
+            order_batch_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            product_id INTEGER,
+            sku TEXT UNIQUE,
+            description TEXT,
+            amount REAL,
+            created_date TEXT,
+            status TEXT DEFAULT 'pending'
+        )
+    `);
+
+    try { await db.execute('CREATE INDEX IF NOT EXISTS idx_purchase_orders_status ON purchase_orders (status)'); } catch (e) {}
+    try { await db.execute('CREATE INDEX IF NOT EXISTS idx_purchase_orders_shipper ON purchase_orders (shipper_id)'); } catch (e) {}
+    try { await db.execute('CREATE INDEX IF NOT EXISTS idx_shipping_order_order_id ON shipping_order (order_id)'); } catch (e) {}
+    try { await db.execute('CREATE INDEX IF NOT EXISTS idx_shipping_order_hbl_no ON shipping_order (hbl_no)'); } catch (e) {}
+    try { await db.execute('CREATE UNIQUE INDEX IF NOT EXISTS idx_order_batch_sku ON order_batch (sku)'); } catch (e) {}
+
+    await db.execute(`
+        CREATE TABLE IF NOT EXISTS container_order_batch (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            container_id INTEGER NOT NULL,
+            shipping_order_id INTEGER,
+            order_batch_id INTEGER NOT NULL,
+            amount REAL,
+            weight REAL
+        )
+    `);
+
+    try { await db.execute('CREATE INDEX IF NOT EXISTS idx_cob_container ON container_order_batch (container_id)'); } catch (e) {}
+    try { await db.execute('CREATE INDEX IF NOT EXISTS idx_cob_batch ON container_order_batch (order_batch_id)'); } catch (e) {}
+    try { await db.execute('CREATE INDEX IF NOT EXISTS idx_cob_shipping ON container_order_batch (shipping_order_id)'); } catch (e) {}
+
+    // Seed order_batch from inventory backorders if missing
+    try {
+        await db.execute(`
+            INSERT OR IGNORE INTO order_batch (product_id, sku, description, amount, created_date, status)
+            SELECT 
+                product_parent_id, 
+                sku, 
+                sales_description, 
+                COALESCE(backorder_amount, 0), 
+                strftime('%Y-%m-%d', 'now'), 
+                'pending'
+            FROM inventory
+            WHERE backorder = 1 AND sku IS NOT NULL AND sku != ''
+        `);
+    } catch (e) {}
+
+    // order_batch purchase order & balance migrations
+    try { await db.execute('ALTER TABLE order_batch ADD COLUMN order_id INTEGER'); } catch (e) {}
+    try { await db.execute('ALTER TABLE order_batch ADD COLUMN balance REAL'); } catch (e) {}
+    try { await db.execute('ALTER TABLE order_batch ADD COLUMN balance_exchange_rate REAL'); } catch (e) {}
+    try { await db.execute('ALTER TABLE order_batch ADD COLUMN balance_paid_date TEXT'); } catch (e) {}
+    try { await db.execute('CREATE INDEX IF NOT EXISTS idx_order_batch_order_id ON order_batch (order_id)'); } catch (e) {}
+    try { await db.execute('CREATE INDEX IF NOT EXISTS idx_order_batch_status ON order_batch (status)'); } catch (e) {}
+    try { await db.execute('ALTER TABLE cost_reports ADD COLUMN order_id INTEGER'); } catch (e) {}
+    try { await db.execute('CREATE INDEX IF NOT EXISTS idx_cost_reports_order_id ON cost_reports (order_id)'); } catch (e) {}
 
     // Migrations
     try {
@@ -483,7 +573,10 @@ const initializeTables = async (db) => {
     } catch (e) {}
 
     // Container migrations
-    const containerCols = ['original_eta', 'product_sku', 'origin', 'destination', 'warehouse_received', 'track_status', 'shippment', 'subscription_id', 'ocean_shipper', 'memo'];
+    const containerCols = ['original_eta', 'product_sku', 'origin', 'destination', 'warehouse_received', 'track_status', 'shippment', 'subscription_id', 'ocean_shipper', 'memo', 'shipping_order_detail'];
+    try {
+        await db.execute("ALTER TABLE order_batch ADD COLUMN status TEXT DEFAULT 'pending'");
+    } catch (e) {}
     for (const col of containerCols) {
         try {
             await db.execute(`ALTER TABLE containers ADD COLUMN ${col} TEXT`);

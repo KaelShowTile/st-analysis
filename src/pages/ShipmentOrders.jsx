@@ -1,6 +1,6 @@
 import { getLocalTodayStrSync, getLocalStrFromDate } from '../utils/timezone';
 import { useState, useEffect } from 'react';
-import { getDb, getSetting } from '../db/Database';
+import { getDb, getSetting, setSetting } from '../db/Database';
 import { Plus, Edit, Trash2, Search, Check, ChevronUp, ChevronDown, ListFilter, XCircle, Printer, Download } from 'lucide-react';
 import { confirm, save } from '@tauri-apps/plugin-dialog';
 import { writeTextFile } from '@tauri-apps/plugin-fs';
@@ -86,8 +86,13 @@ export default function ShipmentOrders({ currentUser, initialEditId, onClearEdit
             const sRes = await db.select('SELECT * FROM shippers ORDER BY shipper_name ASC');
             setShippers(sRes);
             const colSetting = await db.select("SELECT value FROM settings WHERE key = 'shipment_orders_columns'");
-            if (colSetting && colSetting.length > 0) {
-                try { setVisibleColumns(JSON.parse(colSetting[0].value)); } catch (e) { }
+            if (colSetting && colSetting.length > 0 && colSetting[0].value) {
+                try {
+                    const parsed = JSON.parse(colSetting[0].value);
+                    if (Array.isArray(parsed) && parsed.length > 0) {
+                        setVisibleColumns(parsed);
+                    }
+                } catch (e) { }
             }
 
             const iRes = await db.select('SELECT * FROM inventory WHERE backorder = 1 ORDER BY sales_description ASC');
@@ -400,12 +405,12 @@ export default function ShipmentOrders({ currentUser, initialEditId, onClearEdit
     });
 
     const toggleColumn = async (col) => {
-        const newCols = visibleColumns.includes(col) ? visibleColumns.filter(c => c !== col) : [...visibleColumns, col];
+        const current = Array.isArray(visibleColumns) ? visibleColumns : defaultCols;
+        const newCols = current.includes(col) ? current.filter(c => c !== col) : [...current, col];
         setVisibleColumns(newCols);
         try {
-            const db = await getDb();
-            await db.execute("INSERT INTO settings (key, value) VALUES ('shipment_orders_columns', $1) ON CONFLICT(key) DO UPDATE SET value = $1", [JSON.stringify(newCols)]);
-        } catch (e) { }
+            await setSetting('shipment_orders_columns', JSON.stringify(newCols));
+        } catch (e) { console.error('Failed to save columns', e); }
     };
 
     const handleSort = (key) => {

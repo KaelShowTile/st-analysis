@@ -1,6 +1,7 @@
 import { getLocalTodayStrSync, getLocalStrFromDate } from '../utils/timezone';
+import { syncOrderBatchStatuses } from '../utils/orderBatchSync';
 import { useState, useEffect, useRef } from 'react';
-import { getDb, getSetting } from '../db/Database';
+import { getDb, getSetting, setSetting } from '../db/Database';
 import { Plus, Download, Calendar, Edit, FileText, CheckCircle, Navigation, XCircle, Search, Printer, ChevronDown, ChevronUp, Columns, Star } from 'lucide-react';
 import { save, confirm } from '@tauri-apps/plugin-dialog';
 import { writeTextFile } from '@tauri-apps/plugin-fs';
@@ -86,6 +87,7 @@ export default function ContainerList({ currentUser, onNavigateToShipment, isAct
     const [shippersMap, setShippersMap] = useState({});
     const [inventoryMap, setInventoryMap] = useState({});
     const [shipmentsMap, setShipmentsMap] = useState({});
+    const [shippingOrdersMap, setShippingOrdersMap] = useState({});
     const [quota, setQuota] = useState({ max: 50, usage: 0 });
 
     // Modal state
@@ -109,6 +111,7 @@ export default function ContainerList({ currentUser, onNavigateToShipment, isAct
     const [showColumnModal, setShowColumnModal] = useState(false);
 
     const canWrite = currentUser?.permissions?.containerList?.write;
+    const autoUpdateCheckedRef = useRef(false);
 
     useEffect(() => {
         if (isActive !== false) {
@@ -116,6 +119,7 @@ export default function ContainerList({ currentUser, onNavigateToShipment, isAct
             loadMappings();
             loadQuota();
             syncTrackedContainers();
+            autoUpdateDeliveredContainers();
         }
     }, [isActive]);
 
@@ -196,10 +200,28 @@ export default function ContainerList({ currentUser, onNavigateToShipment, isAct
             shpOrders.forEach(s => soMap[s.shipment_id] = s);
             setShipmentsMap(soMap);
 
+            // Load New Shipping Orders mapping (shipping_order_id -> purchase_order shipper & invoice)
+            try {
+                const newShpOrders = await db.select(`
+                    SELECT so.shipping_order_id, so.order_id, so.hbl_no,
+                           po.invoice_no, po.shipper_id
+                    FROM shipping_order so
+                    LEFT JOIN purchase_orders po ON so.order_id = po.order_id
+                `);
+                const newSoMap = {};
+                (newShpOrders || []).forEach(s => newSoMap[s.shipping_order_id] = s);
+                setShippingOrdersMap(newSoMap);
+            } catch (soErr) {
+                console.error('Failed to load new shipping orders mapping', soErr);
+            }
+
             const colSetting = await db.select("SELECT value FROM settings WHERE key = 'container_list_columns'");
-            if (colSetting && colSetting.length > 0) {
+            if (colSetting && colSetting.length > 0 && colSetting[0].value) {
                 try {
-                    setVisibleColumns(JSON.parse(colSetting[0].value));
+                    const parsed = JSON.parse(colSetting[0].value);
+                    if (Array.isArray(parsed) && parsed.length > 0) {
+                        setVisibleColumns(parsed);
+                    }
                 } catch (e) { }
             }
 
@@ -300,6 +322,35 @@ export default function ContainerList({ currentUser, onNavigateToShipment, isAct
         }
     };
 
+    const autoUpdateDeliveredContainers = async () => {
+        if (autoUpdateCheckedRef.current) return;
+        autoUpdateCheckedRef.current = true;
+        try {
+            const db = await getDb();
+            const todayStr = getLocalTodayStrSync();
+            const needUpdate = await db.select(
+                `SELECT container_id FROM containers 
+                 WHERE delivery IS NOT NULL AND delivery != '' AND delivery < $1 
+                   AND (warehouse_received IS NULL OR warehouse_received = '' OR warehouse_received = '0')`,
+                [todayStr]
+            );
+            if (needUpdate && needUpdate.length > 0) {
+                const ids = needUpdate.map(r => r.container_id);
+                const placeholders = ids.map((_, i) => `$${i + 1}`).join(', ');
+                await db.execute(
+                    `UPDATE containers SET warehouse_received = '1' WHERE container_id IN (${placeholders})`,
+                    ids
+                );
+                await syncOrderBatchStatuses(db);
+                if (activeYear) {
+                    loadRecords(activeYear);
+                }
+            }
+        } catch (e) {
+            console.error("Failed to auto-update warehouse_received", e);
+        }
+    };
+
     const loadRecords = async (year) => {
         setLoading(true);
         try {
@@ -341,15 +392,29 @@ export default function ContainerList({ currentUser, onNavigateToShipment, isAct
 
             const data = { ...formData };
             delete data.year; // Handle year separately for insertion
-            delete data.ocean_shipper_colour;
-            delete data.ocean_shipper_name;
+
+            // Whitelist of valid containers table columns to prevent non-existent column errors
+            const VALID_CONTAINER_COLS = [
+                'year', 'doc', 'contents', 'cntr_no', 'pol', 'etd', 'eta', 'delivery',
+                'info', 'internal_memo', 'last_free_dtn', 'original_eta', 'product_sku',
+                'origin', 'destination', 'warehouse_received', 'track_status', 'shippment',
+                'subscription_id', 'deposit', 'balance', 'payment_date', 'ocean_shipper',
+                'memo', 'mark_record', 'freight_cost', 'shipping_order_detail'
+            ];
+
+            const containerPayload = {};
+            for (const col of VALID_CONTAINER_COLS) {
+                if (data[col] !== undefined) {
+                    containerPayload[col] = data[col];
+                }
+            }
 
             let newContainerId = null;
 
             if (editingRecord) {
                 // Update
-                const cols = Object.keys(data);
-                const vals = Object.values(data);
+                const cols = Object.keys(containerPayload);
+                const vals = Object.values(containerPayload);
                 const setString = cols.map((c, i) => `${c} = $${i + 1}`).join(', ');
                 await db.execute(
                     `UPDATE containers SET ${setString} WHERE container_id = $${cols.length + 1}`,
@@ -358,9 +423,9 @@ export default function ContainerList({ currentUser, onNavigateToShipment, isAct
                 newContainerId = editingRecord.container_id;
             } else {
                 // Insert
-                data.year = activeYear;
-                const cols = Object.keys(data);
-                const vals = Object.values(data);
+                containerPayload.year = activeYear;
+                const cols = Object.keys(containerPayload);
+                const vals = Object.values(containerPayload);
                 const placeholders = cols.map((_, i) => `$${i + 1}`).join(', ');
                 const res = await db.execute(
                     `INSERT INTO containers (${cols.join(', ')}) VALUES (${placeholders})`,
@@ -368,6 +433,92 @@ export default function ContainerList({ currentUser, onNavigateToShipment, isAct
                 );
                 newContainerId = res.lastInsertId;
             }
+
+            // Sync relations to container_order_batch table and update order_batch status
+            if (newContainerId && data.shipping_order_detail) {
+                try {
+                    const details = typeof data.shipping_order_detail === 'string'
+                        ? JSON.parse(data.shipping_order_detail)
+                        : data.shipping_order_detail;
+
+                    if (Array.isArray(details)) {
+                        // 0. Query previous relation entries to detect unlinked batches
+                        const prevCob = await db.select('SELECT DISTINCT order_batch_id FROM container_order_batch WHERE container_id = $1', [newContainerId]);
+                        const prevBatchIds = (prevCob || []).map(r => r.order_batch_id).filter(Boolean);
+
+                        // 1. Remove previous relation entries for this container
+                        await db.execute('DELETE FROM container_order_batch WHERE container_id = $1', [newContainerId]);
+
+                        const linkedBatchIds = [];
+                        const batchToOrderId = {};
+
+                        // 2. Insert new relations
+                        for (const block of details) {
+                            const shippingOrderId = block.shipping_order_id ? Number(block.shipping_order_id) : null;
+                            let blockOrderId = null;
+                            if (shippingOrderId) {
+                                const soRows = await db.select('SELECT order_id FROM shipping_order WHERE shipping_order_id = $1', [shippingOrderId]);
+                                if (soRows && soRows.length > 0 && soRows[0].order_id) {
+                                    blockOrderId = soRows[0].order_id;
+                                }
+                            }
+                            if (Array.isArray(block.products)) {
+                                for (const prod of block.products) {
+                                    if (prod.order_batch_id) {
+                                        const bId = Number(prod.order_batch_id);
+                                        linkedBatchIds.push(bId);
+                                        if (blockOrderId) {
+                                            batchToOrderId[bId] = blockOrderId;
+                                        }
+                                        await db.execute(
+                                            `INSERT INTO container_order_batch (container_id, shipping_order_id, order_batch_id, amount, weight)
+                                             VALUES ($1, $2, $3, $4, $5)`,
+                                            [
+                                                newContainerId,
+                                                shippingOrderId,
+                                                bId,
+                                                prod.amount != null && prod.amount !== '' ? Number(prod.amount) : null,
+                                                prod.weight != null && prod.weight !== '' ? Number(prod.weight) : null
+                                            ]
+                                        );
+                                    }
+                                }
+                            }
+                        }
+
+                        // 3. Update order_id for newly linked batches
+                        for (const bId of linkedBatchIds) {
+                            if (batchToOrderId[bId]) {
+                                await db.execute(
+                                    `UPDATE order_batch SET order_id = $1 WHERE order_batch_id = $2`,
+                                    [batchToOrderId[bId], bId]
+                                );
+                            }
+                        }
+
+                        // 4. Reset order_id on batches that were removed from this container if not in any other container
+                        const removedBatchIds = prevBatchIds.filter(id => !linkedBatchIds.includes(id));
+                        for (const rId of removedBatchIds) {
+                            const remaining = await db.select('SELECT COUNT(*) as cnt FROM container_order_batch WHERE order_batch_id = $1', [rId]);
+                            if (!remaining || remaining.length === 0 || remaining[0].cnt === 0) {
+                                await db.execute(
+                                    `UPDATE order_batch SET order_id = NULL WHERE order_batch_id = $1`,
+                                    [rId]
+                                );
+                            }
+                        }
+
+                        // 5. Synchronize statuses of all affected batches
+                        const affectedBatchIds = Array.from(new Set([...prevBatchIds, ...linkedBatchIds]));
+                        if (affectedBatchIds.length > 0) {
+                            await syncOrderBatchStatuses(db, affectedBatchIds);
+                        }
+                    }
+                } catch (cobErr) {
+                    console.error('Failed to sync container_order_batch relations:', cobErr);
+                }
+            }
+
 
             // Sync payments from shipment orders based on contents
             if (data.contents) {
@@ -444,7 +595,24 @@ export default function ContainerList({ currentUser, onNavigateToShipment, isAct
         if (!confirmed) return;
         try {
             const db = await getDb();
+            const prevCob = await db.select('SELECT DISTINCT order_batch_id FROM container_order_batch WHERE container_id = $1', [id]);
+            const prevBatchIds = (prevCob || []).map(r => r.order_batch_id).filter(Boolean);
+
             await db.execute('DELETE FROM containers WHERE container_id = $1', [id]);
+            await db.execute('DELETE FROM container_order_batch WHERE container_id = $1', [id]);
+
+            for (const rId of prevBatchIds) {
+                const remaining = await db.select('SELECT COUNT(*) as cnt FROM container_order_batch WHERE order_batch_id = $1', [rId]);
+                if (!remaining || remaining.length === 0 || remaining[0].cnt === 0) {
+                    await db.execute(
+                        `UPDATE order_batch SET order_id = NULL WHERE order_batch_id = $1`,
+                        [rId]
+                    );
+                }
+            }
+            if (prevBatchIds.length > 0) {
+                await syncOrderBatchStatuses(db, prevBatchIds);
+            }
             loadRecords(activeYear);
         } catch (e) {
             console.error('Failed to delete row', e);
@@ -457,6 +625,11 @@ export default function ContainerList({ currentUser, onNavigateToShipment, isAct
             const today = getLocalTodayStrSync();
             const db = await getDb();
             await db.execute('UPDATE containers SET warehouse_received = $1 WHERE container_id = $2', [today, containerId]);
+            const affected = await db.select('SELECT DISTINCT order_batch_id FROM container_order_batch WHERE container_id = $1', [containerId]);
+            const affectedBatchIds = (affected || []).map(r => r.order_batch_id).filter(Boolean);
+            if (affectedBatchIds.length > 0) {
+                await syncOrderBatchStatuses(db, affectedBatchIds);
+            }
             loadRecords(activeYear);
         } catch (e) {
             console.error("Failed to mark as received", e);
@@ -468,6 +641,11 @@ export default function ContainerList({ currentUser, onNavigateToShipment, isAct
         try {
             const db = await getDb();
             await db.execute('UPDATE containers SET delivery = $1 WHERE container_id = $2', [newDelivery, containerId]);
+            const affected = await db.select('SELECT DISTINCT order_batch_id FROM container_order_batch WHERE container_id = $1', [containerId]);
+            const affectedBatchIds = (affected || []).map(r => r.order_batch_id).filter(Boolean);
+            if (affectedBatchIds.length > 0) {
+                await syncOrderBatchStatuses(db, affectedBatchIds);
+            }
             loadRecords(activeYear);
         } catch (e) {
             console.error("Failed to update delivery", e);
@@ -624,24 +802,28 @@ export default function ContainerList({ currentUser, onNavigateToShipment, isAct
                 } else if (col === 'contents') {
                     htmlRows += `<td>${(rData.productsList || []).join('<br/>')}</td>`;
                 } else if (col === 'payment') {
-                    let paymentHtml = (rData.shipmentIds || []).map(sId => {
-                        const shipment = shipmentsMap[sId];
-                        if (!shipment) return '';
-                        const shipper = shippersMap[shipment.shipper];
-                        const rate = shipper ? (shipper.deposit || 0) : 0;
+                    if (rData.isNewStructure) {
+                        htmlRows += `<td>-</td>`;
+                    } else {
+                        let paymentHtml = (rData.shipmentIds || []).map(sId => {
+                            const shipment = shipmentsMap[sId];
+                            if (!shipment) return '';
+                            const shipper = shippersMap[shipment.shipper];
+                            const rate = shipper ? (shipper.deposit || 0) : 0;
 
-                        let cDep = {}; let cBal = {}; let cPay = {};
-                        try { if (r.deposit) cDep = JSON.parse(r.deposit); } catch (e) { }
-                        try { if (r.balance) cBal = JSON.parse(r.balance); } catch (e) { }
-                        try { if (r.payment_date) cPay = JSON.parse(r.payment_date); } catch (e) { }
+                            let cDep = {}; let cBal = {}; let cPay = {};
+                            try { if (r.deposit) cDep = JSON.parse(r.deposit); } catch (e) { }
+                            try { if (r.balance) cBal = JSON.parse(r.balance); } catch (e) { }
+                            try { if (r.payment_date) cPay = JSON.parse(r.payment_date); } catch (e) { }
 
-                        const isDepositPaid = cDep[sId] != null;
-                        const isBalancePaid = cBal[sId] != null;
-                        const dateStr = cPay[sId] ? ` (${cPay[sId]})` : '';
+                            const isDepositPaid = cDep[sId] != null;
+                            const isBalancePaid = cBal[sId] != null;
+                            const dateStr = cPay[sId] ? ` (${cPay[sId]})` : '';
 
-                        return `Dep ${rate}%: ${isDepositPaid ? 'Paid' : 'Pending'} | Bal ${100 - rate}%: ${isBalancePaid ? 'Paid' : 'Pending'}${dateStr}`;
-                    }).filter(Boolean).join('<br/>');
-                    htmlRows += `<td>${paymentHtml}</td>`;
+                            return `Dep ${rate}%: ${isDepositPaid ? 'Paid' : 'Pending'} | Bal ${100 - rate}%: ${isBalancePaid ? 'Paid' : 'Pending'}${dateStr}`;
+                        }).filter(Boolean).join('<br/>');
+                        htmlRows += `<td>${paymentHtml || '-'}</td>`;
+                    }
                 } else if (col === 'ocean_shipper') {
                     htmlRows += `<td>${r.ocean_shipper_name || ''}</td>`;
                 } else if (col === 'hbl_no') {
@@ -731,30 +913,63 @@ export default function ContainerList({ currentUser, onNavigateToShipment, isAct
         let uniqueHBLs = new Set();
         let productsList = [];
         let shipmentIds = [];
+        let isNewStructure = false;
 
-        let parsedContents = [];
+        let parsedShippingDetail = [];
         try {
-            if (row.contents && typeof row.contents === 'string' && row.contents.startsWith('[')) {
-                parsedContents = JSON.parse(row.contents);
-            } else if (row.contents) {
-                parsedContents = JSON.parse(row.contents);
+            if (row.shipping_order_detail) {
+                const parsed = typeof row.shipping_order_detail === 'string'
+                    ? JSON.parse(row.shipping_order_detail)
+                    : row.shipping_order_detail;
+                if (Array.isArray(parsed) && parsed.length > 0) {
+                    parsedShippingDetail = parsed;
+                    isNewStructure = true;
+                }
             }
         } catch (e) { }
 
-        if (Array.isArray(parsedContents)) {
-            parsedContents.forEach(block => {
-                if (block.shipment_id) shipmentIds.push(block.shipment_id);
-                const shipment = shipmentsMap[block.shipment_id];
-                if (shipment) {
-                    uniqueShippers.add(shipment.shipper);
-                    if (shipment.invoice_no) uniqueInvoices.add(shipment.invoice_no);
-                }
+        if (isNewStructure) {
+            parsedShippingDetail.forEach(block => {
                 if (block.hbl_no) uniqueHBLs.add(block.hbl_no);
-
+                if (block.shipping_order_id) {
+                    const so = shippingOrdersMap[block.shipping_order_id];
+                    if (so) {
+                        if (so.shipper_id) uniqueShippers.add(so.shipper_id);
+                        if (so.invoice_no) uniqueInvoices.add(so.invoice_no);
+                        if (so.hbl_no && !block.hbl_no) uniqueHBLs.add(so.hbl_no);
+                    }
+                }
                 if (block.products && Array.isArray(block.products)) {
-                    block.products.forEach(p => productsList.push(p.sales_description));
+                    block.products.forEach(p => {
+                        if (p.batch_label) productsList.push(p.batch_label);
+                    });
                 }
             });
+        } else {
+            let parsedContents = [];
+            try {
+                if (row.contents && typeof row.contents === 'string' && row.contents.startsWith('[')) {
+                    parsedContents = JSON.parse(row.contents);
+                } else if (row.contents) {
+                    parsedContents = JSON.parse(row.contents);
+                }
+            } catch (e) { }
+
+            if (Array.isArray(parsedContents)) {
+                parsedContents.forEach(block => {
+                    if (block.shipment_id) shipmentIds.push(block.shipment_id);
+                    const shipment = shipmentsMap[block.shipment_id];
+                    if (shipment) {
+                        uniqueShippers.add(shipment.shipper);
+                        if (shipment.invoice_no) uniqueInvoices.add(shipment.invoice_no);
+                    }
+                    if (block.hbl_no) uniqueHBLs.add(block.hbl_no);
+
+                    if (block.products && Array.isArray(block.products)) {
+                        block.products.forEach(p => productsList.push(p.sales_description));
+                    }
+                });
+            }
         }
 
         return {
@@ -762,7 +977,8 @@ export default function ContainerList({ currentUser, onNavigateToShipment, isAct
             invoices: Array.from(uniqueInvoices),
             hbls: Array.from(uniqueHBLs),
             productsList,
-            shipmentIds
+            shipmentIds,
+            isNewStructure
         };
     };
 
@@ -999,11 +1215,11 @@ export default function ContainerList({ currentUser, onNavigateToShipment, isAct
     };
 
     const toggleColumn = async (col) => {
-        const newCols = visibleColumns.includes(col) ? visibleColumns.filter(c => c !== col) : [...visibleColumns, col];
+        const current = Array.isArray(visibleColumns) ? visibleColumns : defaultCols;
+        const newCols = current.includes(col) ? current.filter(c => c !== col) : [...current, col];
         setVisibleColumns(newCols);
         try {
-            const db = await getDb();
-            await db.execute("INSERT INTO settings (key, value) VALUES ('container_list_columns', $1) ON CONFLICT(key) DO UPDATE SET value = $1", [JSON.stringify(newCols)]);
+            await setSetting('container_list_columns', JSON.stringify(newCols));
         } catch (e) { console.error('Failed to save columns', e); }
     };
 
@@ -1029,6 +1245,8 @@ export default function ContainerList({ currentUser, onNavigateToShipment, isAct
         if (valA > valB) return sortConfig.direction === 'asc' ? 1 : -1;
         return 0;
     });
+
+    const activeCols = Array.isArray(visibleColumns) ? visibleColumns : defaultCols;
 
     return (
         <div className="containers-layout">
@@ -1143,22 +1361,22 @@ export default function ContainerList({ currentUser, onNavigateToShipment, isAct
                                             </div>
                                         </th>
                                         {canWrite && <th style={{ width: '80px', minWidth: '80px', textAlign: 'center' }}>Actions</th>}
-                                        {visibleColumns.includes('cntr_no') && <th className="has-sort-icon" style={{ width: '130px', minWidth: '130px', cursor: 'pointer' }} onClick={() => handleSort('cntr_no')}><SortIcon columnKey="cntr_no" /> Container No. </th>}
-                                        {visibleColumns.includes('hbl_no') && <th className="has-sort-icon" style={{ width: '120px', minWidth: '120px', cursor: 'pointer' }} onClick={() => handleSort('hbl_no')}><SortIcon columnKey="hbl_no" /> HBL No.</th>}
-                                        {visibleColumns.includes('shipper') && <th className="has-sort-icon" style={{ width: '150px', minWidth: '150px', cursor: 'pointer' }} onClick={() => handleSort('shipper')}><SortIcon columnKey="shipper" /> Shipper</th>}
-                                        {visibleColumns.includes('invoice_no') && <th className="has-sort-icon" style={{ width: '120px', minWidth: '120px', cursor: 'pointer' }} onClick={() => handleSort('invoice_no')}><SortIcon columnKey="invoice_no" /> Invoice No.</th>}
-                                        {visibleColumns.includes('payment') && <th style={{ width: '240px', minWidth: '240px' }}>Payment</th>}
-                                        {visibleColumns.includes('doc') && <th style={{ width: '60px', minWidth: '60px' }}>Doc</th>}
-                                        {visibleColumns.includes('contents') && <th className="has-sort-icon" style={{ width: '400px', minWidth: '250px', cursor: 'pointer' }} onClick={() => handleSort('contents')}><SortIcon columnKey="contents" /> Contents</th>}
-                                        {visibleColumns.includes('tracking') && <th className="has-sort-icon" style={{ width: '100px', minWidth: '100px', cursor: 'pointer' }} onClick={() => handleSort('track_status')}><SortIcon columnKey="track_status" /> Tracking</th>}
-                                        {visibleColumns.includes('pol') && <th className="has-sort-icon" style={{ width: '150px', minWidth: '100px', cursor: 'pointer' }} onClick={() => handleSort('pol')}><SortIcon columnKey="pol" /> POL</th>}
-                                        {visibleColumns.includes('etd') && <th className="has-sort-icon" style={{ width: '100px', minWidth: '100px', cursor: 'pointer' }} onClick={() => handleSort('etd')}><SortIcon columnKey="etd" /> ETD</th>}
-                                        {visibleColumns.includes('eta') && <th className="has-sort-icon" style={{ width: '100px', minWidth: '100px', cursor: 'pointer' }} onClick={() => handleSort('eta')}><SortIcon columnKey="eta" /> ETA</th>}
-                                        {visibleColumns.includes('original_eta') && <th className="has-sort-icon" style={{ width: '130px', minWidth: '130px', cursor: 'pointer' }} onClick={() => handleSort('original_eta')}><SortIcon columnKey="original_eta" /> Original ETA</th>}
-                                        {visibleColumns.includes('delivery') && <th className="has-sort-icon" style={{ width: '130px', minWidth: '130px', cursor: 'pointer' }} onClick={() => handleSort('delivery')}><SortIcon columnKey="delivery" /> Delivery</th>}
-                                        {visibleColumns.includes('info') && <th className="has-sort-icon" style={{ width: '150px', minWidth: '150px', cursor: 'pointer' }} onClick={() => handleSort('info')}><SortIcon columnKey="info" /> Info</th>}
-                                        {visibleColumns.includes('last_free_dtn') && <th className="has-sort-icon" style={{ width: '130px', minWidth: '130px', cursor: 'pointer' }} onClick={() => handleSort('last_free_dtn')}><SortIcon columnKey="last_free_dtn" /> Last Free DTN</th>}
-                                        {visibleColumns.includes('memo') && <th className="has-sort-icon" style={{ width: '200px', minWidth: '200px', cursor: 'pointer' }} onClick={() => handleSort('memo')}><SortIcon columnKey="memo" /> Memo</th>}
+                                        {activeCols.includes('cntr_no') && <th className="has-sort-icon" style={{ width: '130px', minWidth: '130px', cursor: 'pointer' }} onClick={() => handleSort('cntr_no')}><SortIcon columnKey="cntr_no" /> Container No. </th>}
+                                        {activeCols.includes('hbl_no') && <th className="has-sort-icon" style={{ width: '120px', minWidth: '120px', cursor: 'pointer' }} onClick={() => handleSort('hbl_no')}><SortIcon columnKey="hbl_no" /> HBL No.</th>}
+                                        {activeCols.includes('shipper') && <th className="has-sort-icon" style={{ width: '150px', minWidth: '150px', cursor: 'pointer' }} onClick={() => handleSort('shipper')}><SortIcon columnKey="shipper" /> Shipper</th>}
+                                        {activeCols.includes('invoice_no') && <th className="has-sort-icon" style={{ width: '120px', minWidth: '120px', cursor: 'pointer' }} onClick={() => handleSort('invoice_no')}><SortIcon columnKey="invoice_no" /> Invoice No.</th>}
+                                        {activeCols.includes('payment') && <th style={{ width: '240px', minWidth: '240px' }}>Payment</th>}
+                                        {activeCols.includes('doc') && <th style={{ width: '60px', minWidth: '60px' }}>Doc</th>}
+                                        {activeCols.includes('contents') && <th className="has-sort-icon" style={{ width: '400px', minWidth: '250px', cursor: 'pointer' }} onClick={() => handleSort('contents')}><SortIcon columnKey="contents" /> Contents</th>}
+                                        {activeCols.includes('tracking') && <th className="has-sort-icon" style={{ width: '100px', minWidth: '100px', cursor: 'pointer' }} onClick={() => handleSort('track_status')}><SortIcon columnKey="track_status" /> Tracking</th>}
+                                        {activeCols.includes('pol') && <th className="has-sort-icon" style={{ width: '150px', minWidth: '100px', cursor: 'pointer' }} onClick={() => handleSort('pol')}><SortIcon columnKey="pol" /> POL</th>}
+                                        {activeCols.includes('etd') && <th className="has-sort-icon" style={{ width: '100px', minWidth: '100px', cursor: 'pointer' }} onClick={() => handleSort('etd')}><SortIcon columnKey="etd" /> ETD</th>}
+                                        {activeCols.includes('eta') && <th className="has-sort-icon" style={{ width: '100px', minWidth: '100px', cursor: 'pointer' }} onClick={() => handleSort('eta')}><SortIcon columnKey="eta" /> ETA</th>}
+                                        {activeCols.includes('original_eta') && <th className="has-sort-icon" style={{ width: '130px', minWidth: '130px', cursor: 'pointer' }} onClick={() => handleSort('original_eta')}><SortIcon columnKey="original_eta" /> Original ETA</th>}
+                                        {activeCols.includes('delivery') && <th className="has-sort-icon" style={{ width: '130px', minWidth: '130px', cursor: 'pointer' }} onClick={() => handleSort('delivery')}><SortIcon columnKey="delivery" /> Delivery</th>}
+                                        {activeCols.includes('info') && <th className="has-sort-icon" style={{ width: '150px', minWidth: '150px', cursor: 'pointer' }} onClick={() => handleSort('info')}><SortIcon columnKey="info" /> Info</th>}
+                                        {activeCols.includes('last_free_dtn') && <th className="has-sort-icon" style={{ width: '130px', minWidth: '130px', cursor: 'pointer' }} onClick={() => handleSort('last_free_dtn')}><SortIcon columnKey="last_free_dtn" /> Last Free DTN</th>}
+                                        {activeCols.includes('memo') && <th className="has-sort-icon" style={{ width: '200px', minWidth: '200px', cursor: 'pointer' }} onClick={() => handleSort('memo')}><SortIcon columnKey="memo" /> Memo</th>}
                                         {canWrite && <th style={{ width: '40px', minWidth: '40px' }}></th>}
                                     </tr>
                                 </thead>
@@ -1205,121 +1423,125 @@ export default function ContainerList({ currentUser, onNavigateToShipment, isAct
                                                             </div>
                                                         </td>
                                                     )}
-                                                    {visibleColumns.includes('cntr_no') && <td><div className="readonly-cell">{row.cntr_no}</div></td>}
-                                                    {visibleColumns.includes('hbl_no') && <td>
+                                                    {activeCols.includes('cntr_no') && <td><div className="readonly-cell">{row.cntr_no}</div></td>}
+                                                    {activeCols.includes('hbl_no') && <td>
                                                         <div className="readonly-cell" style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
                                                             {rData.hbls.map((hbl, i) => <div key={i}>{hbl}</div>)}
                                                             {rData.hbls.length === 0 && '-'}
                                                         </div>
                                                     </td>}
-                                                    {visibleColumns.includes('shipper') && <td>
+                                                    {activeCols.includes('shipper') && <td>
                                                         <div className="readonly-cell" style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
                                                             {rData.shippers.map((s, i) => <div key={i}>{shippersMap[s]?.name || s}</div>)}
                                                             {rData.shippers.length === 0 && '-'}
                                                         </div>
                                                     </td>}
-                                                    {visibleColumns.includes('invoice_no') && <td>
+                                                    {activeCols.includes('invoice_no') && <td>
                                                         <div className="readonly-cell" style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
                                                             {rData.invoices.map((inv, i) => <div key={i}>{inv}</div>)}
                                                             {rData.invoices.length === 0 && '-'}
                                                         </div>
                                                     </td>}
-                                                    {visibleColumns.includes('payment') && <td>
-                                                        <div className="readonly-cell" style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                                                            {rData.shipmentIds.map((sId, i) => {
-                                                                const shipment = shipmentsMap[sId];
-                                                                if (!shipment) return null;
-                                                                const shipper = shippersMap[shipment.shipper];
-                                                                const rate = shipper ? (shipper.deposit || 0) : 0;
+                                                    {activeCols.includes('payment') && <td>
+                                                        {rData.isNewStructure ? (
+                                                            <div className="readonly-cell" style={{ color: '#94a3b8' }}>-</div>
+                                                        ) : (
+                                                            <div className="readonly-cell" style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                                                                {rData.shipmentIds.map((sId, i) => {
+                                                                    const shipment = shipmentsMap[sId];
+                                                                    if (!shipment) return null;
+                                                                    const shipper = shippersMap[shipment.shipper];
+                                                                    const rate = shipper ? (shipper.deposit || 0) : 0;
 
-                                                                let cDep = {};
-                                                                let cBal = {};
-                                                                let cPay = {};
-                                                                try { if (row.deposit) cDep = JSON.parse(row.deposit); } catch (e) { }
-                                                                try { if (row.balance) cBal = JSON.parse(row.balance); } catch (e) { }
-                                                                try { if (row.payment_date) cPay = JSON.parse(row.payment_date); } catch (e) { }
+                                                                    let cDep = {};
+                                                                    let cBal = {};
+                                                                    let cPay = {};
+                                                                    try { if (row.deposit) cDep = JSON.parse(row.deposit); } catch (e) { }
+                                                                    try { if (row.balance) cBal = JSON.parse(row.balance); } catch (e) { }
+                                                                    try { if (row.payment_date) cPay = JSON.parse(row.payment_date); } catch (e) { }
 
-                                                                const isDepositPaid = cDep[sId] != null;
-                                                                const isBalancePaid = cBal[sId] != null;
-                                                                const currentPaymentDate = cPay[sId] || '';
+                                                                    const isDepositPaid = cDep[sId] != null;
+                                                                    const isBalancePaid = cBal[sId] != null;
+                                                                    const currentPaymentDate = cPay[sId] || '';
 
-                                                                const isPaid = (rate === 0 || isDepositPaid) && (rate === 100 ? isDepositPaid : isBalancePaid);
-                                                                const overdueStyle = getPaymentStyle(isPaid, sId, row.etd);
+                                                                    const isPaid = (rate === 0 || isDepositPaid) && (rate === 100 ? isDepositPaid : isBalancePaid);
+                                                                    const overdueStyle = getPaymentStyle(isPaid, sId, row.etd);
 
-                                                                return (
-                                                                    <div key={i} style={{ display: 'flex', flexDirection: 'column', gap: '4px', ...overdueStyle }}>
-                                                                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
-                                                                            <label style={{ display: 'flex', alignItems: 'center', gap: '4px', cursor: canWrite ? 'pointer' : 'default', fontSize: '0.8rem' }}>
-                                                                                <input
-                                                                                    type="checkbox"
-                                                                                    checked={isDepositPaid}
-                                                                                    disabled={!canWrite}
-                                                                                    onChange={(e) => {
-                                                                                        const checked = e.target.checked;
-                                                                                        let dbDeposit = checked ? rate : null;
-                                                                                        let dbBalance = isBalancePaid ? (cBal[sId]) : null;
-                                                                                        let dbPaymentDate = currentPaymentDate;
-
-                                                                                        if (rate === 100) {
-                                                                                            if (checked) {
-                                                                                                dbBalance = 0;
-                                                                                                dbPaymentDate = dbPaymentDate || getLocalTodayStrSync();
-                                                                                            } else {
-                                                                                                dbBalance = null;
-                                                                                                dbPaymentDate = null;
-                                                                                            }
-                                                                                        }
-                                                                                        handleContainerPaymentUpdate(row.container_id, sId, 'deposit', dbDeposit, { balance: dbBalance, payment_date: dbPaymentDate });
-                                                                                    }}
-                                                                                />
-                                                                                {rate}%
-                                                                            </label>
-
-                                                                            {rate < 100 && (
+                                                                    return (
+                                                                        <div key={i} style={{ display: 'flex', flexDirection: 'column', gap: '4px', ...overdueStyle }}>
+                                                                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
                                                                                 <label style={{ display: 'flex', alignItems: 'center', gap: '4px', cursor: canWrite ? 'pointer' : 'default', fontSize: '0.8rem' }}>
                                                                                     <input
                                                                                         type="checkbox"
-                                                                                        checked={isBalancePaid}
+                                                                                        checked={isDepositPaid}
                                                                                         disabled={!canWrite}
                                                                                         onChange={(e) => {
                                                                                             const checked = e.target.checked;
-                                                                                            let dbBalance = checked ? (100 - rate) : null;
-                                                                                            let dbPaymentDate = (checked && isDepositPaid && !currentPaymentDate) ? getLocalTodayStrSync() : currentPaymentDate;
-                                                                                            handleContainerPaymentUpdate(row.container_id, sId, 'balance', dbBalance, { payment_date: dbPaymentDate });
+                                                                                            let dbDeposit = checked ? rate : null;
+                                                                                            let dbBalance = isBalancePaid ? (cBal[sId]) : null;
+                                                                                            let dbPaymentDate = currentPaymentDate;
+
+                                                                                            if (rate === 100) {
+                                                                                                if (checked) {
+                                                                                                    dbBalance = 0;
+                                                                                                    dbPaymentDate = dbPaymentDate || getLocalTodayStrSync();
+                                                                                                } else {
+                                                                                                    dbBalance = null;
+                                                                                                    dbPaymentDate = null;
+                                                                                                }
+                                                                                            }
+                                                                                            handleContainerPaymentUpdate(row.container_id, sId, 'deposit', dbDeposit, { balance: dbBalance, payment_date: dbPaymentDate });
                                                                                         }}
                                                                                     />
-                                                                                    {100 - rate}%
+                                                                                    {rate}%
                                                                                 </label>
-                                                                            )}
 
-                                                                            {isDepositPaid && (isBalancePaid || rate === 100) && (
-                                                                                <input
-                                                                                    type="date"
-                                                                                    value={currentPaymentDate}
-                                                                                    disabled={!canWrite}
-                                                                                    onChange={(e) => handleContainerPaymentUpdate(row.container_id, sId, 'payment_date', e.target.value)}
-                                                                                    style={{ padding: '0px 4px', border: '1px solid #cbd5e1', borderRadius: '4px', fontSize: '0.75rem', outline: 'none' }}
-                                                                                />
-                                                                            )}
+                                                                                {rate < 100 && (
+                                                                                    <label style={{ display: 'flex', alignItems: 'center', gap: '4px', cursor: canWrite ? 'pointer' : 'default', fontSize: '0.8rem' }}>
+                                                                                        <input
+                                                                                            type="checkbox"
+                                                                                            checked={isBalancePaid}
+                                                                                            disabled={!canWrite}
+                                                                                            onChange={(e) => {
+                                                                                                const checked = e.target.checked;
+                                                                                                let dbBalance = checked ? (100 - rate) : null;
+                                                                                                let dbPaymentDate = (checked && isDepositPaid && !currentPaymentDate) ? getLocalTodayStrSync() : currentPaymentDate;
+                                                                                                handleContainerPaymentUpdate(row.container_id, sId, 'balance', dbBalance, { payment_date: dbPaymentDate });
+                                                                                            }}
+                                                                                        />
+                                                                                        {100 - rate}%
+                                                                                    </label>
+                                                                                )}
+
+                                                                                {isDepositPaid && (isBalancePaid || rate === 100) && (
+                                                                                    <input
+                                                                                        type="date"
+                                                                                        value={currentPaymentDate}
+                                                                                        disabled={!canWrite}
+                                                                                        onChange={(e) => handleContainerPaymentUpdate(row.container_id, sId, 'payment_date', e.target.value)}
+                                                                                        style={{ padding: '0px 4px', border: '1px solid #cbd5e1', borderRadius: '4px', fontSize: '0.75rem', outline: 'none' }}
+                                                                                    />
+                                                                                )}
+                                                                            </div>
                                                                         </div>
-                                                                    </div>
-                                                                );
-                                                            })}
-                                                            {rData.shipmentIds.length === 0 && '-'}
-                                                        </div>
+                                                                    );
+                                                                })}
+                                                                {rData.shipmentIds.length === 0 && '-'}
+                                                            </div>
+                                                        )}
                                                     </td>}
-                                                    {visibleColumns.includes('doc') && <td style={{ textAlign: 'center' }}>
+                                                    {activeCols.includes('doc') && <td style={{ textAlign: 'center' }}>
                                                         <div style={{
                                                             width: '12px', height: '12px', borderRadius: '50%', margin: '0 auto',
                                                             backgroundColor: (row.doc === 'true' || row.doc === '1') ? '#10b981' : '#ef4444'
                                                         }}></div>
                                                     </td>}
-                                                    {visibleColumns.includes('contents') && <td>
+                                                    {activeCols.includes('contents') && <td>
                                                         <div className="readonly-cell" style={{ whiteSpace: 'normal', wordBreak: 'break-word', fontSize: '0.85rem', display: 'flex', flexDirection: 'column', gap: '4px' }}>
                                                             {rData.productsList && rData.productsList.length > 0 ? rData.productsList.map((p, idx) => <div key={idx}>{p}</div>) : '-'}
                                                         </div>
                                                     </td>}
-                                                    {visibleColumns.includes('tracking') && <td>
+                                                    {activeCols.includes('tracking') && <td>
                                                         <div className="readonly-cell" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                                                             {trackingIds.has(row.container_id) ? (
                                                                 <span style={{ color: '#64748b', fontStyle: 'italic', fontSize: '11px' }}>Tracking...</span>
@@ -1338,11 +1560,11 @@ export default function ContainerList({ currentUser, onNavigateToShipment, isAct
                                                             )}
                                                         </div>
                                                     </td>}
-                                                    {visibleColumns.includes('pol') && <td><div className="readonly-cell">{row.pol}</div></td>}
-                                                    {visibleColumns.includes('etd') && <td><div className="readonly-cell">{formatDate(row.etd)}</div></td>}
-                                                    {visibleColumns.includes('eta') && <td><div className="readonly-cell" style={getEtaStyle(row.eta, row.original_eta)}>{formatDate(row.eta)}</div></td>}
-                                                    {visibleColumns.includes('original_eta') && <td><div className="readonly-cell">{formatDate(row.original_eta)}</div></td>}
-                                                    {visibleColumns.includes('delivery') && <td>
+                                                    {activeCols.includes('pol') && <td><div className="readonly-cell">{row.pol}</div></td>}
+                                                    {activeCols.includes('etd') && <td><div className="readonly-cell">{formatDate(row.etd)}</div></td>}
+                                                    {activeCols.includes('eta') && <td><div className="readonly-cell" style={getEtaStyle(row.eta, row.original_eta)}>{formatDate(row.eta)}</div></td>}
+                                                    {activeCols.includes('original_eta') && <td><div className="readonly-cell">{formatDate(row.original_eta)}</div></td>}
+                                                    {activeCols.includes('delivery') && <td>
                                                         <div className="readonly-cell">
                                                             {canWrite ? (
                                                                 <DeliveryInput 
@@ -1354,13 +1576,13 @@ export default function ContainerList({ currentUser, onNavigateToShipment, isAct
                                                             )}
                                                         </div>
                                                     </td>}
-                                                    {visibleColumns.includes('info') && <td>
+                                                    {activeCols.includes('info') && <td>
                                                         <div className="readonly-cell" style={{ whiteSpace: 'pre-wrap' }}>
                                                             {row.info}
                                                         </div>
                                                     </td>}
-                                                    {visibleColumns.includes('last_free_dtn') && <td><div className="readonly-cell">{row.last_free_dtn}</div></td>}
-                                                    {visibleColumns.includes('memo') && <td>
+                                                    {activeCols.includes('last_free_dtn') && <td><div className="readonly-cell">{row.last_free_dtn}</div></td>}
+                                                    {activeCols.includes('memo') && <td>
                                                         <div className="readonly-cell" style={{ whiteSpace: 'pre-wrap' }}>
                                                             {row.memo}
                                                         </div>
@@ -1417,7 +1639,7 @@ export default function ContainerList({ currentUser, onNavigateToShipment, isAct
                         <div className="modal-body" style={{ display: 'flex', flexDirection: 'column', gap: '12px', maxHeight: '400px', overflowY: 'auto' }}>
                             {defaultCols.map(col => (
                                 <label key={col} style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
-                                    <input type="checkbox" checked={visibleColumns.includes(col)} onChange={() => toggleColumn(col)} />
+                                    <input type="checkbox" checked={activeCols.includes(col)} onChange={() => toggleColumn(col)} />
                                     {col.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}
                                 </label>
                             ))}

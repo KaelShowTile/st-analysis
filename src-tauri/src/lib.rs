@@ -96,22 +96,64 @@ async fn init_sync_architecture(
     ).await;
 
     // 2. Initialize replica.db
+    let marker_path = std::path::Path::new(&replica_path)
+        .parent()
+        .map(|p| p.join("connected_turso_url.txt"));
+
+    let mut should_reset = false;
+    if let Some(ref m_path) = marker_path {
+        if m_path.exists() {
+            let prev_url = std::fs::read_to_string(m_path).unwrap_or_default();
+            if prev_url.trim() != url.trim() {
+                println!("Turso URL changed from '{}' to '{}'. Resetting replica.", prev_url.trim(), url.trim());
+                should_reset = true;
+            }
+        } else {
+            // First time tracking marker: check if existing replica was built for a different DB.
+            let info_path = format!("{}-info", replica_path);
+            if std::path::Path::new(&info_path).exists() {
+                let info_str = std::fs::read_to_string(&info_path).unwrap_or_default();
+                if info_str.contains("\"generation\":424") && url.contains("testing") {
+                    println!("Detected legacy production replica info on testing database. Resetting replica.");
+                    should_reset = true;
+                }
+            }
+        }
+    }
+
+    if should_reset {
+        let _ = std::fs::remove_file(&replica_path);
+        let _ = std::fs::remove_file(format!("{}-wal", replica_path));
+        let _ = std::fs::remove_file(format!("{}-shm", replica_path));
+        let _ = std::fs::remove_file(format!("{}-info", replica_path));
+
+        let _ = std::fs::remove_file(&mirror_path);
+        let _ = std::fs::remove_file(format!("{}-wal", mirror_path));
+        let _ = std::fs::remove_file(format!("{}-shm", mirror_path));
+
+        let _ = queue_conn.execute("DELETE FROM offline_queue", ()).await;
+    }
+
     let replica_exists = std::path::Path::new(&replica_path).exists();
     let mirror_file = std::path::Path::new(&mirror_path);
     let mirror_exists = mirror_file.exists();
 
-    let replica_db = Builder::new_remote_replica(&replica_path, url, token)
+    let replica_db = Builder::new_remote_replica(&replica_path, url.clone(), token)
         .sync_protocol(libsql::SyncProtocol::V2)
         .build()
         .await
         .map_err(|e| format!("Failed to build replica db: {}", e))?;
 
-    // Only block on network sync if neither mirror nor replica exists (fresh install)
+    // Only block on network sync if neither mirror nor replica exists (fresh install or reset)
     if !mirror_exists && !replica_exists {
-        let _ = app.emit("init-progress", "Downloading initial database...");
+        let _ = app.emit("init-progress", "Downloading database from cloud...");
         replica_db.sync().await.map_err(|e| format!("Initial replica sync failed: {}", e))?;
     } else {
         println!("Existing local database detected. Skipping blocking sync for instant startup.");
+    }
+
+    if let Some(ref m_path) = marker_path {
+        let _ = std::fs::write(m_path, url.trim());
     }
 
     // 3. Initialize mirror.db
@@ -125,6 +167,19 @@ async fn init_sync_architecture(
         .await
         .map_err(|e| format!("Failed to build mirror db: {}", e))?;
     let mirror_conn = mirror_db.connect().map_err(|e| format!("Failed to connect mirror db: {}", e))?;
+
+    // Auto-calibrate offline_queue auto-increment seq so it always stays ahead of sync_watermarks
+    if let Ok(mut wm_rows) = mirror_conn.query("SELECT MAX(last_seq_id) FROM sync_watermarks", ()).await {
+        if let Ok(Some(r)) = wm_rows.next().await {
+            let max_wm: i64 = r.get(0).unwrap_or(0);
+            if max_wm > 0 {
+                let _ = queue_conn.execute(
+                    "UPDATE sqlite_sequence SET seq = MAX(seq, ?1) WHERE name = 'offline_queue'",
+                    vec![LibsqlValue::Integer(max_wm + 10)],
+                ).await;
+            }
+        }
+    }
 
     // Store into state
     *state.replica_db.lock().await = Some(replica_db);
@@ -448,6 +503,10 @@ async fn sync_replica_and_mirror(
                 "DELETE FROM offline_queue WHERE seq_id <= ?1 AND status = 'pending'",
                 vec![LibsqlValue::Integer(synced_seq_id)],
             ).await;
+            let _ = q_conn.execute(
+                "UPDATE sqlite_sequence SET seq = MAX(seq, ?1) WHERE name = 'offline_queue'",
+                vec![LibsqlValue::Integer(synced_seq_id + 10)],
+            ).await;
         }
     }
 
@@ -492,6 +551,91 @@ async fn sync_replica_and_mirror(
     })
 }
 
+#[tauri::command]
+async fn force_reset_and_sync(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, DbState>,
+    url: String,
+    token: String,
+) -> Result<(), String> {
+    let _lock = state.sync_mutex.lock().await;
+
+    let replica_path = state.replica_path.lock().await.clone();
+    let mirror_path = state.mirror_path.lock().await.clone();
+
+    if replica_path.is_empty() || mirror_path.is_empty() {
+        return Err("Sync architecture not initialized".to_string());
+    }
+
+    // 1. Close connections to mirror and replica
+    {
+        *state.mirror_conn.lock().await = None;
+        *state.mirror_db.lock().await = None;
+        *state.replica_db.lock().await = None;
+    }
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+    // 2. Remove files
+    let _ = std::fs::remove_file(&replica_path);
+    let _ = std::fs::remove_file(format!("{}-wal", replica_path));
+    let _ = std::fs::remove_file(format!("{}-shm", replica_path));
+    let _ = std::fs::remove_file(format!("{}-info", replica_path));
+
+    let _ = std::fs::remove_file(&mirror_path);
+    let _ = std::fs::remove_file(format!("{}-wal", mirror_path));
+    let _ = std::fs::remove_file(format!("{}-shm", mirror_path));
+
+    // Clear queue
+    {
+        let q_guard = state.queue_conn.lock().await;
+        if let Some(q) = q_guard.as_ref() {
+            let _ = q.execute("DELETE FROM offline_queue", ()).await;
+        }
+    }
+
+    // 3. Rebuild replica and pull full DB
+    let _ = app.emit("init-progress", "Downloading fresh database from cloud...");
+    let replica_db = Builder::new_remote_replica(&replica_path, url.clone(), token)
+        .sync_protocol(libsql::SyncProtocol::V2)
+        .build()
+        .await
+        .map_err(|e| format!("Failed to build new replica: {}", e))?;
+
+    replica_db.sync().await.map_err(|e| format!("Failed to sync new replica: {}", e))?;
+
+    // Copy to mirror
+    std::fs::copy(&replica_path, &mirror_path).map_err(|e| format!("Failed to copy replica to mirror: {}", e))?;
+    let r_wal = format!("{}-wal", replica_path);
+    let m_wal = format!("{}-wal", mirror_path);
+    if std::path::Path::new(&r_wal).exists() {
+        let _ = std::fs::copy(&r_wal, &m_wal);
+    }
+    let r_shm = format!("{}-shm", replica_path);
+    let m_shm = format!("{}-shm", mirror_path);
+    if std::path::Path::new(&r_shm).exists() {
+        let _ = std::fs::copy(&r_shm, &m_shm);
+    }
+
+    // Reopen mirror
+    let mirror_db = Builder::new_local(&mirror_path)
+        .build()
+        .await
+        .map_err(|e| format!("Failed to reopen mirror: {}", e))?;
+    let mirror_conn = mirror_db.connect().map_err(|e| format!("Failed to connect mirror: {}", e))?;
+
+    *state.replica_db.lock().await = Some(replica_db);
+    *state.mirror_db.lock().await = Some(mirror_db);
+    *state.mirror_conn.lock().await = Some(mirror_conn);
+
+    // Update marker
+    if let Some(parent) = std::path::Path::new(&replica_path).parent() {
+        let marker = parent.join("connected_turso_url.txt");
+        let _ = std::fs::write(marker, url.trim());
+    }
+
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let db_state = DbState {
@@ -528,7 +672,8 @@ pub fn run() {
             get_pending_queue,
             mark_queue_failed,
             get_queue_stats,
-            sync_replica_and_mirror
+            sync_replica_and_mirror,
+            force_reset_and_sync
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

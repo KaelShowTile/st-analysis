@@ -233,6 +233,7 @@ export const triggerFullSync = async (force = false) => {
         detail: { isSyncing: true, lastSyncTime, lastSyncResult, lastSyncError } 
     }));
 
+    let pushError = null;
     try {
         // Step 1: Check offline queue and push to Cloudflare Worker if URL configured
         const pendingActions = await invoke('get_pending_queue');
@@ -296,9 +297,10 @@ export const triggerFullSync = async (force = false) => {
                             });
                         }
                     }
-                    throw new Error(`Worker rejected payload (${response.status}): ${errText}`);
+                    pushError = `Worker rejected payload (${response.status}): ${errText}`;
+                } else {
+                    console.log("[Sync] Worker successfully accepted queue batch.");
                 }
-                console.log("[Sync] Worker successfully accepted queue batch.");
             }
         }
 
@@ -308,11 +310,15 @@ export const triggerFullSync = async (force = false) => {
 
         lastSyncTime = Date.now();
         lastSyncResult = syncResult;
-        lastSyncError = null;
+        lastSyncError = pushError;
 
         window.dispatchEvent(new CustomEvent('database-synced', { 
             detail: { syncResult, timestamp: lastSyncTime } 
         }));
+
+        if (pushError) {
+            return { success: false, error: pushError, result: syncResult };
+        }
 
         return { success: true, result: syncResult };
     } catch (err) {
@@ -354,4 +360,20 @@ export const initSyncService = () => {
     }, 10 * 60 * 1000);
 
     console.log("[Sync] Sync service initialized.");
+};
+
+/**
+ * Force reset local database replica and pull full copy from cloud
+ */
+export const forceResetDatabase = async () => {
+    const store = await load('settings.json', { autoSave: false });
+    const url = await store.get('turso_url');
+    const token = await store.get('turso_token');
+    if (!url || !token) {
+        throw new Error("Missing Turso configuration in settings.");
+    }
+    await invoke('force_reset_and_sync', { url, token });
+    window.dispatchEvent(new CustomEvent('database-synced', { 
+        detail: { timestamp: Date.now() } 
+    }));
 };

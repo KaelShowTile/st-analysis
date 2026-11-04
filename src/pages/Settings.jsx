@@ -7,7 +7,7 @@ import { Trash2, Plus, Download, Upload, DatabaseBackup, RotateCcw, FolderOpen, 
 import { appDataDir, join, dirname } from '@tauri-apps/api/path';
 import { readDir, copyFile, exists, mkdir } from '@tauri-apps/plugin-fs';
 import { load } from '@tauri-apps/plugin-store';
-import { getSyncConfig, saveSyncConfig, getQueueStats, triggerFullSync, testWorkerConnection } from '../utils/syncService';
+import { getSyncConfig, saveSyncConfig, getQueueStats, triggerFullSync, testWorkerConnection, forceResetDatabase } from '../utils/syncService';
 
 export default function Settings({ currentUser, isActive }) {
     const [attributes, setAttributes] = useState([]);
@@ -163,6 +163,7 @@ export default function Settings({ currentUser, isActive }) {
     const handleSaveDatabaseBackend = async () => {
         try {
             const store = await load('settings.json', { autoSave: false });
+            const oldUrl = await store.get('turso_url');
             await store.set('db_type', dbType);
             await store.set('turso_url', tursoUrl);
             await store.set('turso_token', tursoToken);
@@ -173,7 +174,11 @@ export default function Settings({ currentUser, isActive }) {
                 workerSecret: syncWorkerSecret
             });
 
-            alert("Database backend configuration saved. The application will now restart to apply changes.");
+            if (oldUrl && oldUrl.trim() !== tursoUrl.trim()) {
+                alert("Turso database URL changed. The application will now restart and download a clean copy from the new database.");
+            } else {
+                alert("Database backend configuration saved. The application will now restart to apply changes.");
+            }
             window.location.reload();
         } catch (e) {
             console.error("Failed to save database backend:", e);
@@ -230,6 +235,24 @@ export default function Settings({ currentUser, isActive }) {
             });
         } finally {
             setTestingWorker(false);
+        }
+    };
+
+    const [isResetting, setIsResetting] = useState(false);
+
+    const handleForceResetDatabase = async () => {
+        const confirmed = window.confirm("Are you sure you want to re-download the database from Turso Cloud? Any unpushed local changes will be replaced with the cloud copy.");
+        if (!confirmed) return;
+        setIsResetting(true);
+        try {
+            await forceResetDatabase();
+            alert("Database re-downloaded successfully from Turso Cloud! The application will now reload.");
+            window.location.reload();
+        } catch (e) {
+            console.error("Failed to reset database from cloud:", e);
+            alert("Failed to reset database from cloud: " + (e?.message || e));
+        } finally {
+            setIsResetting(false);
         }
     };
 
@@ -811,16 +834,29 @@ export default function Settings({ currentUser, isActive }) {
                         <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', background: 'var(--surface-color)', padding: '16px', borderRadius: '6px', border: '1px solid var(--border-color)' }}>
                             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                                 <h4 style={{ margin: 0, fontSize: '0.95rem' }}>Sync & Offline Queue Status</h4>
-                                <button
-                                    type="button"
-                                    onClick={handleManualSync}
-                                    disabled={isSyncing}
-                                    className="btn-primary"
-                                    style={{ padding: '6px 14px', fontSize: '0.85rem' }}
-                                >
-                                    <RefreshCw size={14} className={isSyncing ? 'spin-animation' : ''} />
-                                    {isSyncing ? 'Syncing...' : 'Sync Now'}
-                                </button>
+                                <div style={{ display: 'flex', gap: '8px' }}>
+                                    <button
+                                        type="button"
+                                        onClick={handleForceResetDatabase}
+                                        disabled={isResetting || isSyncing}
+                                        className="btn-secondary"
+                                        style={{ padding: '6px 14px', fontSize: '0.85rem', display: 'flex', alignItems: 'center', gap: '4px' }}
+                                        title="Re-download the entire database from Turso Cloud"
+                                    >
+                                        <RotateCcw size={14} className={isResetting ? 'spin-animation' : ''} />
+                                        {isResetting ? 'Re-downloading...' : 'Re-download Cloud DB'}
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={handleManualSync}
+                                        disabled={isSyncing || isResetting}
+                                        className="btn-primary"
+                                        style={{ padding: '6px 14px', fontSize: '0.85rem', display: 'flex', alignItems: 'center', gap: '4px' }}
+                                    >
+                                        <RefreshCw size={14} className={isSyncing ? 'spin-animation' : ''} />
+                                        {isSyncing ? 'Syncing...' : 'Sync Now'}
+                                    </button>
+                                </div>
                             </div>
 
                             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '12px' }}>
