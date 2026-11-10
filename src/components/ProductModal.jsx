@@ -3,6 +3,7 @@ import { X } from 'lucide-react';
 import { getDb } from '../db/Database';
 import { load } from '@tauri-apps/plugin-store';
 import { fetch as tauriFetch } from '@tauri-apps/plugin-http';
+import { fetchProductFeeds } from '../utils/productFeeds';
 
 const overlayStyle = {
     position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
@@ -37,7 +38,10 @@ function getInitialProductState() {
         gto_regular_price: '',
         gto_sales_price: '',
         st_id: '',
-        st_name: ''
+        st_name: '',
+        cht_shopify_id: '',
+        cht_shopify_name: '',
+        cht_shopify_inventory_item_id: ''
     };
 }
 
@@ -69,11 +73,24 @@ export default function ProductModal({
             setStFeedPosts(window.productFeeds?.st || []);
             setChtFeedItems(window.productFeeds?.cht || []);
             setGtoFeedItems(window.productFeeds?.gto || []);
+
+            // If feeds are not yet loaded, load them
+            if (!window.productFeeds?.cht?.length && !window.productFeeds?.st?.length) {
+                fetchProductFeeds().then(feeds => {
+                    setStFeedPosts(feeds?.st || []);
+                    setChtFeedItems(feeds?.cht || []);
+                    setGtoFeedItems(feeds?.gto || []);
+                });
+            }
+
             if (product) {
                 setProductFormData({
                     id: product.product_id,
                     ...product,
-                    suffix: product.suffix || ''
+                    suffix: product.suffix || '',
+                    cht_shopify_id: product.cht_shopify_id || '',
+                    cht_shopify_name: product.cht_shopify_name || '',
+                    cht_shopify_inventory_item_id: product.cht_shopify_inventory_item_id || ''
                 });
                 setColorInput(product.color || '');
                 setFinishInput(product.finish || '');
@@ -231,8 +248,9 @@ export default function ProductModal({
                         product_name = $1, product_description = $2, collection_id = $3, shipper_id = $4,
                         color = $5, finish = $6, size = $7, m2_per_box = $8, pcs_per_box = $9, box_per_pallet = $10,
                         showtile_name = $11, showtile_product_code = $12, showtile_price = $13, suffix = $14,
-                        cht_name = $15, cht_regular_price = $16, cht_sales_price = $17, gto_name = $18, gto_regular_price = $19, gto_sales_price = $20, st_id = $21, st_name = $22
-                    WHERE product_id = $23
+                        cht_name = $15, cht_regular_price = $16, cht_sales_price = $17, gto_name = $18, gto_regular_price = $19, gto_sales_price = $20, st_id = $21, st_name = $22,
+                        cht_shopify_id = $23, cht_shopify_name = $24, cht_shopify_inventory_item_id = $25
+                    WHERE product_id = $26
                 `, [
                     productFormData.product_name, productFormData.product_description, productFormData.collection_id, productFormData.shipper_id || null,
                     finalColor, finalFinish, productFormData.size,
@@ -240,6 +258,7 @@ export default function ProductModal({
                     productFormData.showtile_name, productFormData.showtile_product_code, productFormData.showtile_price || null, productFormData.suffix || null,
                     productFormData.cht_name, productFormData.cht_regular_price || null, productFormData.cht_sales_price || null, productFormData.gto_name, productFormData.gto_regular_price || null, productFormData.gto_sales_price || null,
                     productFormData.st_id, productFormData.st_name,
+                    productFormData.cht_shopify_id || null, productFormData.cht_shopify_name || null, productFormData.cht_shopify_inventory_item_id || null,
                     productFormData.id
                 ]);
             } else {
@@ -248,15 +267,17 @@ export default function ProductModal({
                         product_name, product_description, collection_id, shipper_id,
                         color, finish, size, m2_per_box, pcs_per_box, box_per_pallet,
                         showtile_name, showtile_product_code, showtile_price, suffix,
-                        cht_name, cht_regular_price, cht_sales_price, gto_name, gto_regular_price, gto_sales_price, st_id, st_name
-                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22)
+                        cht_name, cht_regular_price, cht_sales_price, gto_name, gto_regular_price, gto_sales_price, st_id, st_name,
+                        cht_shopify_id, cht_shopify_name, cht_shopify_inventory_item_id
+                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25)
                 `, [
                     productFormData.product_name, productFormData.product_description, productFormData.collection_id, productFormData.shipper_id || null,
                     finalColor, finalFinish, productFormData.size,
                     productFormData.m2_per_box || null, productFormData.pcs_per_box || null, productFormData.box_per_pallet || null,
                     productFormData.showtile_name, productFormData.showtile_product_code, productFormData.showtile_price || null, productFormData.suffix || null,
                     productFormData.cht_name, productFormData.cht_regular_price || null, productFormData.cht_sales_price || null, productFormData.gto_name, productFormData.gto_regular_price || null, productFormData.gto_sales_price || null,
-                    productFormData.st_id, productFormData.st_name
+                    productFormData.st_id, productFormData.st_name,
+                    productFormData.cht_shopify_id || null, productFormData.cht_shopify_name || null, productFormData.cht_shopify_inventory_item_id || null
                 ]);
             }
 
@@ -311,22 +332,10 @@ export default function ProductModal({
                         </>
                     )}
                     <div
-                        style={{ paddingBottom: '12px', cursor: 'pointer', fontWeight: 500, color: productTab === 'st' ? '#3b82f6' : '#64748b', borderBottom: productTab === 'st' ? '2px solid #3b82f6' : 'none' }}
-                        onClick={() => setProductTab('st')}
+                        style={{ paddingBottom: '12px', cursor: 'pointer', fontWeight: 500, color: productTab === 'website' ? '#3b82f6' : '#64748b', borderBottom: productTab === 'website' ? '2px solid #3b82f6' : 'none' }}
+                        onClick={() => setProductTab('website')}
                     >
-                        ST
-                    </div>
-                    <div
-                        style={{ paddingBottom: '12px', cursor: 'pointer', fontWeight: 500, color: productTab === 'cht' ? '#3b82f6' : '#64748b', borderBottom: productTab === 'cht' ? '2px solid #3b82f6' : 'none' }}
-                        onClick={() => setProductTab('cht')}
-                    >
-                        CHT
-                    </div>
-                    <div
-                        style={{ paddingBottom: '12px', cursor: 'pointer', fontWeight: 500, color: productTab === 'gto' ? '#3b82f6' : '#64748b', borderBottom: productTab === 'gto' ? '2px solid #3b82f6' : 'none' }}
-                        onClick={() => setProductTab('gto')}
-                    >
-                        GTO
+                        Websites
                     </div>
                 </div>
 
@@ -516,132 +525,150 @@ export default function ProductModal({
                         </div>
                     )}
 
-                    {productTab === 'st' && (
-                        <div style={{ background: '#f8fafc', padding: '20px', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
-                            <h3 style={{ margin: '0 0 16px 0', fontSize: '1rem', color: '#0f172a' }}>ST Website Binding</h3>
-                            <div className="form-group" style={{ margin: 0, position: 'relative' }}>
-                                <label style={{ display: 'block', marginBottom: '6px', fontSize: '0.85rem', color: '#475569' }}>ST Name</label>
-                                <input
-                                    type="text"
-                                    className="form-control"
-                                    value={productFormData.st_name || ''}
-                                    onChange={e => {
-                                        setProductFormData({ ...productFormData, st_name: e.target.value, st_id: null });
-                                        setShowStSuggestions(true);
-                                    }}
-                                    onFocus={() => setShowStSuggestions(true)}
-                                    onBlur={() => setTimeout(() => setShowStSuggestions(false), 200)}
-                                    style={{ width: '100%', padding: '6px 10px', border: '1px solid #cbd5e1', borderRadius: '4px' }}
-                                />
-                                {showStSuggestions && stFeedPosts.length > 0 && (
-                                    <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, background: 'white', border: '1px solid #cbd5e1', borderRadius: '4px', marginTop: '4px', zIndex: 10, maxHeight: '200px', overflowY: 'auto', boxShadow: '0 4px 6px -1px rgba(0,0,0,0.1)' }}>
-                                        {stFeedPosts.filter(p => p.post_title.toLowerCase().includes((productFormData.st_name || '').toLowerCase())).map(p => (
-                                            <div
-                                                key={p.post_id}
-                                                style={{ padding: '8px 12px', cursor: 'pointer', borderBottom: '1px solid #f1f5f9', fontSize: '0.9rem' }}
-                                                onMouseDown={() => {
-                                                    setProductFormData({ ...productFormData, st_name: p.post_title, st_id: p.post_id });
-                                                    setShowStSuggestions(false);
-                                                }}
-                                            >
-                                                {p.post_title}
-                                            </div>
-                                        ))}
-                                    </div>
-                                )}
+                    {productTab === 'website' && (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+                            <div style={{ background: '#f8fafc', padding: '20px', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
+                                <h3 style={{ margin: '0 0 16px 0', fontSize: '1rem', color: '#0f172a' }}>ST Website Binding</h3>
+                                <div className="form-group" style={{ margin: 0, position: 'relative' }}>
+                                    <label style={{ display: 'block', marginBottom: '6px', fontSize: '0.85rem', color: '#475569' }}>ST Name</label>
+                                    <input
+                                        type="text"
+                                        className="form-control"
+                                        value={productFormData.st_name || ''}
+                                        onChange={e => {
+                                            setProductFormData({ ...productFormData, st_name: e.target.value, st_id: null });
+                                            setShowStSuggestions(true);
+                                        }}
+                                        onFocus={() => setShowStSuggestions(true)}
+                                        onBlur={() => setTimeout(() => setShowStSuggestions(false), 200)}
+                                        style={{ width: '100%', padding: '6px 10px', border: '1px solid #cbd5e1', borderRadius: '4px' }}
+                                    />
+                                    {showStSuggestions && stFeedPosts.length > 0 && (
+                                        <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, background: 'white', border: '1px solid #cbd5e1', borderRadius: '4px', marginTop: '4px', zIndex: 10, maxHeight: '200px', overflowY: 'auto', boxShadow: '0 4px 6px -1px rgba(0,0,0,0.1)' }}>
+                                            {stFeedPosts.filter(p => p.post_title.toLowerCase().includes((productFormData.st_name || '').toLowerCase())).map(p => (
+                                                <div
+                                                    key={p.post_id}
+                                                    style={{ padding: '8px 12px', cursor: 'pointer', borderBottom: '1px solid #f1f5f9', fontSize: '0.9rem' }}
+                                                    onMouseDown={() => {
+                                                        setProductFormData({ ...productFormData, st_name: p.post_title, st_id: p.post_id });
+                                                        setShowStSuggestions(false);
+                                                    }}
+                                                >
+                                                    {p.post_title}
+                                                </div>
+                                            ))}
+                                        </div>
+                                    )}
+                                </div>
                             </div>
-                        </div>
-                    )}
 
-                    {productTab === 'cht' && (
-                        <div style={{ background: '#f8fafc', padding: '20px', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
-                            <h3 style={{ margin: '0 0 16px 0', fontSize: '1rem', color: '#0f172a' }}>CHT Website Binding</h3>
-                            <div className="form-group" style={{ margin: 0, position: 'relative' }}>
-                                <label style={{ display: 'block', marginBottom: '6px', fontSize: '0.85rem', color: '#475569' }}>CHT Name</label>
-                                <input
-                                    type="text"
-                                    className="form-control"
-                                    value={productFormData.cht_name || ''}
-                                    onChange={e => {
-                                        setProductFormData({ ...productFormData, cht_name: e.target.value });
-                                        setShowChtSuggestions(true);
-                                    }}
-                                    onFocus={() => setShowChtSuggestions(true)}
-                                    onBlur={() => setTimeout(() => setShowChtSuggestions(false), 200)}
-                                    style={{ width: '100%', padding: '6px 10px', border: '1px solid #cbd5e1', borderRadius: '4px' }}
-                                />
-                                {showChtSuggestions && chtFeedItems.length > 0 && (
-                                    <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, background: 'white', border: '1px solid #cbd5e1', borderRadius: '4px', marginTop: '4px', zIndex: 10, maxHeight: '200px', overflowY: 'auto', boxShadow: '0 4px 6px -1px rgba(0,0,0,0.1)' }}>
-                                        {chtFeedItems.filter(p => p.name.toLowerCase().includes((productFormData.cht_name || '').toLowerCase())).map(p => (
-                                            <div
-                                                key={p.id}
-                                                style={{ padding: '8px 12px', cursor: 'pointer', borderBottom: '1px solid #f1f5f9', fontSize: '0.9rem' }}
-                                                onMouseDown={() => {
-                                                    setProductFormData({ ...productFormData, cht_name: p.name });
-                                                    setShowChtSuggestions(false);
-                                                }}
-                                            >
-                                                {p.name}
-                                            </div>
-                                        ))}
+                            <div style={{ background: '#f8fafc', padding: '20px', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+                                    <h3 style={{ margin: 0, fontSize: '1rem', color: '#0f172a' }}>CHT Website Binding</h3>
+                                    {productFormData.cht_shopify_id && (
+                                        <span style={{ fontSize: '0.75rem', color: '#10b981', background: '#ecfdf5', padding: '2px 8px', borderRadius: '4px', border: '1px solid #a7f3d0' }}>
+                                            Bound ID: {productFormData.cht_shopify_id}
+                                        </span>
+                                    )}
+                                </div>
+                                <div className="form-group" style={{ margin: 0, position: 'relative' }}>
+                                    <label style={{ display: 'block', marginBottom: '6px', fontSize: '0.85rem', color: '#475569' }}>CHT Name</label>
+                                    <input
+                                        type="text"
+                                        className="form-control"
+                                        placeholder="Search product - variant..."
+                                        value={productFormData.cht_shopify_name || ''}
+                                        onChange={e => {
+                                            setProductFormData({
+                                                ...productFormData,
+                                                cht_shopify_name: e.target.value,
+                                                cht_shopify_id: null,
+                                                cht_shopify_inventory_item_id: null
+                                            });
+                                            setShowChtSuggestions(true);
+                                        }}
+                                        onFocus={() => setShowChtSuggestions(true)}
+                                        onBlur={() => setTimeout(() => setShowChtSuggestions(false), 200)}
+                                        style={{ width: '100%', padding: '6px 10px', border: '1px solid #cbd5e1', borderRadius: '4px' }}
+                                    />
+                                    {showChtSuggestions && chtFeedItems.length > 0 && (
+                                        <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, background: 'white', border: '1px solid #cbd5e1', borderRadius: '4px', marginTop: '4px', zIndex: 10, maxHeight: '200px', overflowY: 'auto', boxShadow: '0 4px 6px -1px rgba(0,0,0,0.1)' }}>
+                                            {chtFeedItems.filter(p => (p.name || '').toLowerCase().includes((productFormData.cht_shopify_name || '').toLowerCase())).map(p => (
+                                                <div
+                                                    key={p.id}
+                                                    style={{ padding: '8px 12px', cursor: 'pointer', borderBottom: '1px solid #f1f5f9', fontSize: '0.9rem' }}
+                                                    onMouseDown={() => {
+                                                        setProductFormData(prev => ({
+                                                            ...prev,
+                                                            cht_shopify_name: p.name,
+                                                            cht_shopify_id: p.id,
+                                                            cht_shopify_inventory_item_id: p.inventory_item_id || null,
+                                                            cht_regular_price: prev.cht_regular_price || p.price || ''
+                                                        }));
+                                                        setShowChtSuggestions(false);
+                                                    }}
+                                                >
+                                                    <div style={{ fontWeight: 500 }}>{p.name}</div>
+                                                    {p.sku && <div style={{ fontSize: '0.75rem', color: '#64748b' }}>SKU: {p.sku}</div>}
+                                                </div>
+                                            ))}
+                                        </div>
+                                    )}
+                                </div>
+                                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px', marginTop: '16px' }}>
+                                    <div className="form-group" style={{ margin: 0 }}>
+                                        <label style={{ display: 'block', marginBottom: '6px', fontSize: '0.85rem', color: '#475569' }}>Regular Price</label>
+                                        <input type="number" step="0.01" className="form-control" value={productFormData.cht_regular_price || ''} onChange={e => setProductFormData({ ...productFormData, cht_regular_price: e.target.value })} style={{ width: '100%', padding: '6px 10px', border: '1px solid #cbd5e1', borderRadius: '4px' }} />
                                     </div>
-                                )}
-                            </div>
-                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px', marginTop: '16px' }}>
-                                <div className="form-group" style={{ margin: 0 }}>
-                                    <label style={{ display: 'block', marginBottom: '6px', fontSize: '0.85rem', color: '#475569' }}>Regular Price</label>
-                                    <input type="number" step="0.01" className="form-control" value={productFormData.cht_regular_price || ''} onChange={e => setProductFormData({ ...productFormData, cht_regular_price: e.target.value })} style={{ width: '100%', padding: '6px 10px', border: '1px solid #cbd5e1', borderRadius: '4px' }} />
-                                </div>
-                                <div className="form-group" style={{ margin: 0 }}>
-                                    <label style={{ display: 'block', marginBottom: '6px', fontSize: '0.85rem', color: '#475569' }}>Sales Price</label>
-                                    <input type="number" step="0.01" className="form-control" value={productFormData.cht_sales_price || ''} onChange={e => setProductFormData({ ...productFormData, cht_sales_price: e.target.value })} style={{ width: '100%', padding: '6px 10px', border: '1px solid #cbd5e1', borderRadius: '4px' }} />
+                                    <div className="form-group" style={{ margin: 0 }}>
+                                        <label style={{ display: 'block', marginBottom: '6px', fontSize: '0.85rem', color: '#475569' }}>Sales Price</label>
+                                        <input type="number" step="0.01" className="form-control" value={productFormData.cht_sales_price || ''} onChange={e => setProductFormData({ ...productFormData, cht_sales_price: e.target.value })} style={{ width: '100%', padding: '6px 10px', border: '1px solid #cbd5e1', borderRadius: '4px' }} />
+                                    </div>
                                 </div>
                             </div>
-                        </div>
-                    )}
 
-                    {productTab === 'gto' && (
-                        <div style={{ background: '#f8fafc', padding: '20px', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
-                            <h3 style={{ margin: '0 0 16px 0', fontSize: '1rem', color: '#0f172a' }}>GTO Website Binding</h3>
-                            <div className="form-group" style={{ margin: 0, position: 'relative' }}>
-                                <label style={{ display: 'block', marginBottom: '6px', fontSize: '0.85rem', color: '#475569' }}>GTO Name</label>
-                                <input
-                                    type="text"
-                                    className="form-control"
-                                    value={productFormData.gto_name || ''}
-                                    onChange={e => {
-                                        setProductFormData({ ...productFormData, gto_name: e.target.value });
-                                        setShowGtoSuggestions(true);
-                                    }}
-                                    onFocus={() => setShowGtoSuggestions(true)}
-                                    onBlur={() => setTimeout(() => setShowGtoSuggestions(false), 200)}
-                                    style={{ width: '100%', padding: '6px 10px', border: '1px solid #cbd5e1', borderRadius: '4px' }}
-                                />
-                                {showGtoSuggestions && gtoFeedItems.length > 0 && (
-                                    <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, background: 'white', border: '1px solid #cbd5e1', borderRadius: '4px', marginTop: '4px', zIndex: 10, maxHeight: '200px', overflowY: 'auto', boxShadow: '0 4px 6px -1px rgba(0,0,0,0.1)' }}>
-                                        {gtoFeedItems.filter(p => p.name.toLowerCase().includes((productFormData.gto_name || '').toLowerCase())).map(p => (
-                                            <div
-                                                key={p.id}
-                                                style={{ padding: '8px 12px', cursor: 'pointer', borderBottom: '1px solid #f1f5f9', fontSize: '0.9rem' }}
-                                                onMouseDown={() => {
-                                                    setProductFormData({ ...productFormData, gto_name: p.name });
-                                                    setShowGtoSuggestions(false);
-                                                }}
-                                            >
-                                                {p.name}
-                                            </div>
-                                        ))}
-                                    </div>
-                                )}
-                            </div>
-                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px', marginTop: '16px' }}>
-                                <div className="form-group" style={{ margin: 0 }}>
-                                    <label style={{ display: 'block', marginBottom: '6px', fontSize: '0.85rem', color: '#475569' }}>Regular Price</label>
-                                    <input type="number" step="0.01" className="form-control" value={productFormData.gto_regular_price || ''} onChange={e => setProductFormData({ ...productFormData, gto_regular_price: e.target.value })} style={{ width: '100%', padding: '6px 10px', border: '1px solid #cbd5e1', borderRadius: '4px' }} />
+                            <div style={{ background: '#f8fafc', padding: '20px', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
+                                <h3 style={{ margin: '0 0 16px 0', fontSize: '1rem', color: '#0f172a' }}>GTO Website Binding</h3>
+                                <div className="form-group" style={{ margin: 0, position: 'relative' }}>
+                                    <label style={{ display: 'block', marginBottom: '6px', fontSize: '0.85rem', color: '#475569' }}>GTO Name</label>
+                                    <input
+                                        type="text"
+                                        className="form-control"
+                                        value={productFormData.gto_name || ''}
+                                        onChange={e => {
+                                            setProductFormData({ ...productFormData, gto_name: e.target.value });
+                                            setShowGtoSuggestions(true);
+                                        }}
+                                        onFocus={() => setShowGtoSuggestions(true)}
+                                        onBlur={() => setTimeout(() => setShowGtoSuggestions(false), 200)}
+                                        style={{ width: '100%', padding: '6px 10px', border: '1px solid #cbd5e1', borderRadius: '4px' }}
+                                    />
+                                    {showGtoSuggestions && gtoFeedItems.length > 0 && (
+                                        <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, background: 'white', border: '1px solid #cbd5e1', borderRadius: '4px', marginTop: '4px', zIndex: 10, maxHeight: '200px', overflowY: 'auto', boxShadow: '0 4px 6px -1px rgba(0,0,0,0.1)' }}>
+                                            {gtoFeedItems.filter(p => p.name.toLowerCase().includes((productFormData.gto_name || '').toLowerCase())).map(p => (
+                                                <div
+                                                    key={p.id}
+                                                    style={{ padding: '8px 12px', cursor: 'pointer', borderBottom: '1px solid #f1f5f9', fontSize: '0.9rem' }}
+                                                    onMouseDown={() => {
+                                                        setProductFormData({ ...productFormData, gto_name: p.name });
+                                                        setShowGtoSuggestions(false);
+                                                    }}
+                                                >
+                                                    {p.name}
+                                                </div>
+                                            ))}
+                                        </div>
+                                    )}
                                 </div>
-                                <div className="form-group" style={{ margin: 0 }}>
-                                    <label style={{ display: 'block', marginBottom: '6px', fontSize: '0.85rem', color: '#475569' }}>Sales Price</label>
-                                    <input type="number" step="0.01" className="form-control" value={productFormData.gto_sales_price || ''} onChange={e => setProductFormData({ ...productFormData, gto_sales_price: e.target.value })} style={{ width: '100%', padding: '6px 10px', border: '1px solid #cbd5e1', borderRadius: '4px' }} />
+                                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px', marginTop: '16px' }}>
+                                    <div className="form-group" style={{ margin: 0 }}>
+                                        <label style={{ display: 'block', marginBottom: '6px', fontSize: '0.85rem', color: '#475569' }}>Regular Price</label>
+                                        <input type="number" step="0.01" className="form-control" value={productFormData.gto_regular_price || ''} onChange={e => setProductFormData({ ...productFormData, gto_regular_price: e.target.value })} style={{ width: '100%', padding: '6px 10px', border: '1px solid #cbd5e1', borderRadius: '4px' }} />
+                                    </div>
+                                    <div className="form-group" style={{ margin: 0 }}>
+                                        <label style={{ display: 'block', marginBottom: '6px', fontSize: '0.85rem', color: '#475569' }}>Sales Price</label>
+                                        <input type="number" step="0.01" className="form-control" value={productFormData.gto_sales_price || ''} onChange={e => setProductFormData({ ...productFormData, gto_sales_price: e.target.value })} style={{ width: '100%', padding: '6px 10px', border: '1px solid #cbd5e1', borderRadius: '4px' }} />
+                                    </div>
                                 </div>
                             </div>
                         </div>

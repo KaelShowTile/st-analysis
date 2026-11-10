@@ -7,6 +7,7 @@ import PurchaseOrders from './PurchaseOrders';
 import OceanShippers from './OceanShippers';
 import ComingProducts from './ComingProducts';
 import ComingContainers from './ComingContainers';
+import OrderBatches from './OrderBatches';
 import './Containers.css';
 
 import { useEffect } from 'react';
@@ -58,6 +59,14 @@ export default function Containers({ currentUser, isActive, externalShipmentId, 
                         Dashboard
                     </button>
                 )}
+                {(p.orderBatches?.read ?? p.purchaseOrders?.read ?? p.containerDashboard?.read ?? p.admin) && (
+                    <button
+                        className={`subnav-btn ${subTab === 'order_batches' ? 'active' : ''}`}
+                        onClick={() => setSubTab('order_batches')}
+                    >
+                        Order Batches
+                    </button>
+                )}
                 {p.shipmentOrders?.read && (
                     <button
                         className={`subnav-btn ${subTab === 'shipments' ? 'active' : ''}`}
@@ -103,7 +112,7 @@ export default function Containers({ currentUser, isActive, externalShipmentId, 
                         className={`subnav-btn ${subTab === 'shipper' ? 'active' : ''}`}
                         onClick={() => setSubTab('shipper')}
                     >
-                        Shipper
+                        Factory
                     </button>
                 )}
                 {(p.oceanShippers?.read ?? p.admin ?? p.shippers?.read) && (
@@ -117,6 +126,9 @@ export default function Containers({ currentUser, isActive, externalShipmentId, 
             </div>
 
             <div style={{ flex: 1, overflow: 'hidden', display: 'flex' }}>
+                <div style={{ display: subTab === 'order_batches' ? 'flex' : 'none', flex: 1 }}>
+                    <OrderBatches currentUser={currentUser} isActive={isActive && subTab === 'order_batches'} />
+                </div>
                 <div style={{ display: subTab === 'shipments' ? 'flex' : 'none', flex: 1 }}>
                     <ShipmentOrders currentUser={currentUser} initialEditId={editShipmentId} onClearEdit={() => setEditShipmentId(null)} isActive={isActive && subTab === 'shipments'} />
                 </div>

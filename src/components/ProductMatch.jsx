@@ -1,6 +1,8 @@
 import React from 'react';
 import { Edit3, X, Save, Search } from 'lucide-react';
 import { getDb } from '../db/Database';
+import { getLocalTodayStrSync } from '../utils/timezone';
+import { extractFeatures } from '../utils/featureExtractor';
 import '../pages/Inventory.css';
 
 function ProductMatch() {
@@ -8,6 +10,7 @@ function ProductMatch() {
     const [productsList, setProductsList] = React.useState([]);
     const [attributes, setAttributes] = React.useState({ colours: [], finishes: [] });
     const [loading, setLoading] = React.useState(false);
+    const [isExtracting, setIsExtracting] = React.useState(false);
     const [search, setSearch] = React.useState('');
     const [drafts, setDrafts] = React.useState({});
     const [editModal, setEditModal] = React.useState({ show: false, item: null, field: '', val: '', options: [] });
@@ -89,6 +92,74 @@ function ProductMatch() {
         } catch (e) { console.error(e); alert('Failed to ignore'); }
     };
 
+    const handleExtractParameters = async () => {
+        const targets = records.filter(r => {
+            const draftName = drafts[r.product_id]?.extracted_name;
+            const currentName = draftName !== undefined ? draftName : r.extracted_name;
+            return !currentName || !currentName.trim();
+        });
+
+        if (targets.length === 0) {
+            alert('No records without Extracted Name found in the list.');
+            return;
+        }
+
+        setIsExtracting(true);
+        try {
+            const db = await getDb();
+            let colours = attributes.colours || [];
+            let finishes = attributes.finishes || [];
+            if (!colours.length && !finishes.length) {
+                const attrs = await db.select('SELECT type, value FROM attributes');
+                colours = attrs.filter(a => a.type === 'colour').map(a => a.value.trim());
+                finishes = attrs.filter(a => a.type === 'finish').map(a => a.value.trim());
+            }
+
+            for (const r of targets) {
+                const salesDesc = String(r.sales_description || '');
+                const features = extractFeatures(salesDesc, colours, finishes);
+
+                await db.execute(`
+                    UPDATE inventory SET 
+                        extracted_name = $1, extracted_colour = $2, extracted_finish = $3, 
+                        extracted_size = $4, backorder = $5, backorder_amount = $6 
+                    WHERE product_id = $7
+                `, [features.extractedName, features.extractedColour, features.extractedFinish, features.extractedSize, features.backorder, features.backorder_amount, r.product_id]);
+
+                if (features.backorder === 1) {
+                    try {
+                        const todayStr = getLocalTodayStrSync();
+                        await db.execute(`
+                            INSERT INTO order_batch (product_id, sku, description, amount, created_date)
+                            VALUES ($1, $2, $3, $4, $5)
+                            ON CONFLICT(sku) DO UPDATE SET
+                                product_id = COALESCE(excluded.product_id, order_batch.product_id),
+                                description = excluded.description,
+                                amount = excluded.amount,
+                                created_date = excluded.created_date
+                        `, [r.product_parent_id || null, r.sku, salesDesc, features.backorder_amount, todayStr]);
+                    } catch (obErr) {
+                        console.warn("Failed to sync order_batch in extract parameters:", obErr);
+                    }
+                }
+            }
+
+            setDrafts(prev => {
+                const next = { ...prev };
+                targets.forEach(t => { delete next[t.product_id]; });
+                return next;
+            });
+
+            await loadRecords();
+            alert(`Parameters extracted and saved for ${targets.length} record(s).`);
+        } catch (e) {
+            console.error("Failed to extract parameters:", e);
+            alert("Failed to extract parameters");
+        } finally {
+            setIsExtracting(false);
+        }
+    };
+
     const term = search.trim().toLowerCase();
     const filteredRecords = term
         ? records.filter(r => {
@@ -107,7 +178,7 @@ function ProductMatch() {
             <datalist id="products-list-match">
                 {productsList.map(p => <option key={p.product_id} value={p.product_name} />)}
             </datalist>
-            <div className="toolbar" style={{ margin: '0 0 16px 0' }}>
+            <div className="toolbar" style={{ margin: '0 0 16px 0', display: 'flex', alignItems: 'center' }}>
                 <div className="search-box">
                     <Search size={18} className="search-icon" />
                     <input
@@ -121,6 +192,15 @@ function ProductMatch() {
                 <div style={{ color: 'var(--text-color)', fontSize: '0.9rem', marginRight: 'auto', marginLeft: '16px' }}>
                     Total Records: {filteredRecords.length}
                 </div>
+                <button
+                    className="btn-upload white-bg"
+                    onClick={handleExtractParameters}
+                    disabled={loading || isExtracting}
+                    title="Extract parameters from description for rows with missing name"
+                    style={{ marginLeft: '12px', display: 'flex', alignItems: 'center', gap: '6px' }}
+                >
+                    {isExtracting ? 'Extracting...' : 'Extract Parameters'}
+                </button>
             </div>
             <div className="table-container" style={{ margin: 0 }}>
                 {loading ? (

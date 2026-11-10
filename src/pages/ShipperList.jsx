@@ -75,7 +75,7 @@ export default function ShipperList({ currentUser, isActive }) {
         <div className="containers-main" style={{ height: '100%', flex: 1 }}>
             <div className="main-header">
                 <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                    <h2 style={{ margin: 0 }}>Shippers</h2>
+                    <h2 style={{ margin: 0 }}>Factories</h2>
                     {canWrite && (
                         <button className="btn-primary" onClick={handleAddRow}>
                             <Plus size={16} style={{ marginRight: '6px' }} /> Add Row
@@ -93,7 +93,7 @@ export default function ShipperList({ currentUser, isActive }) {
                             <thead>
                                 <tr>
                                     <th style={{ width: '60px', minWidth: '60px' }}>ID</th>
-                                    <th style={{ width: '250px', minWidth: '250px' }}>Shipper Name</th>
+                                    <th style={{ width: '250px', minWidth: '250px' }}>Factory Name</th>
                                     <th style={{ width: '200px', minWidth: '200px' }}>Contact Name</th>
                                     <th style={{ width: '200px', minWidth: '200px' }}>Contact Number</th>
                                     <th style={{ width: '200px', minWidth: '200px' }}>Payment Term</th>
@@ -107,7 +107,7 @@ export default function ShipperList({ currentUser, isActive }) {
                                 {records.length === 0 ? (
                                     <tr>
                                         <td colSpan={canWrite ? 9 : 8} style={{ textAlign: 'center', padding: '32px', color: '#94a3b8' }}>
-                                            No shippers found.
+                                            No factories found.
                                         </td>
                                     </tr>
                                 ) : (

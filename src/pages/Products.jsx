@@ -3,6 +3,7 @@ import { Search, Plus, Edit2, Edit3, X, ChevronDown, ChevronRight, Package, Save
 import { confirm } from '@tauri-apps/plugin-dialog';
 import { getDb } from '../db/Database';
 import { fetchProductFeeds } from '../utils/productFeeds';
+import { normalizeSize } from '../utils/featureExtractor';
 import './Inventory.css';
 
 // Standard styles from other components
@@ -190,38 +191,68 @@ export default function Products() {
         setIsAutoMatchingCollection(collection.collection_id);
         try {
             const db = await getDb();
-            const colName = collection.collection_name;
+            const colName = (collection.collection_name || '').trim();
 
             const query = `
-                SELECT extracted_colour, extracted_finish, extracted_size, MAX(product_id) as latest_inv_id 
+                SELECT * 
                 FROM inventory 
-                WHERE lower(extracted_name) = lower($1) AND (backorder IS NULL OR backorder != 1) 
-                GROUP BY extracted_colour, extracted_finish, extracted_size
+                WHERE lower(trim(extracted_name)) = lower(trim($1)) 
+                  AND (backorder IS NULL OR backorder != 1)
+                ORDER BY product_id DESC
             `;
-            const groups = await db.select(query, [colName]);
+            const invRows = await db.select(query, [colName]);
 
-            if (!groups || groups.length === 0) {
+            if (!invRows || invRows.length === 0) {
                 alert("No matching inventory records found for this collection.");
                 return;
             }
 
+            const groupMap = new Map();
+            for (const inv of invRows) {
+                const rawColor = (inv.extracted_colour || '').trim();
+                const rawFinish = (inv.extracted_finish || '').trim();
+                const rawSize = (inv.extracted_size || '').trim();
+                const normSize = normalizeSize(rawSize);
+
+                const groupKey = `${rawColor.toLowerCase()}:::${rawFinish.toLowerCase()}:::${normSize.toLowerCase()}`;
+
+                if (!groupMap.has(groupKey)) {
+                    groupMap.set(groupKey, {
+                        color: rawColor,
+                        finish: rawFinish,
+                        size: normSize,
+                        items: [inv],
+                        latestInv: inv
+                    });
+                } else {
+                    const group = groupMap.get(groupKey);
+                    group.items.push(inv);
+                    if (!group.color && rawColor) group.color = rawColor;
+                    if (!group.finish && rawFinish) group.finish = rawFinish;
+                    if (!group.size && normSize) group.size = normSize;
+                }
+            }
+
             let createdCount = 0;
-            for (const g of groups) {
-                const color = g.extracted_colour || '';
-                const finish = g.extracted_finish || '';
-                const size = g.extracted_size || '';
+            let linkedCount = 0;
+
+            for (const group of groupMap.values()) {
+                const color = group.color;
+                const finish = group.finish;
+                const size = group.size;
 
                 const exists = products.find(p =>
                     p.collection_id === collection.collection_id &&
-                    (p.color || '').toLowerCase() === color.toLowerCase() &&
-                    (p.finish || '').toLowerCase() === finish.toLowerCase() &&
-                    (p.size || '').toLowerCase() === size.toLowerCase()
+                    (p.color || '').trim().toLowerCase() === color.toLowerCase() &&
+                    (p.finish || '').trim().toLowerCase() === finish.toLowerCase() &&
+                    normalizeSize(p.size || '').toLowerCase() === size.toLowerCase()
                 );
 
-                if (!exists) {
-                    const invDetails = await db.select(`SELECT * FROM inventory WHERE product_id = $1`, [g.latest_inv_id]);
-                    const inv = invDetails && invDetails.length > 0 ? invDetails[0] : null;
-
+                let targetProductId;
+                if (exists) {
+                    targetProductId = exists.product_id;
+                } else {
+                    const inv = group.latestInv;
                     let showCode = '';
                     let showName = '';
                     let showPrice = '';
@@ -254,28 +285,43 @@ export default function Products() {
                         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) RETURNING product_id as id
                     `, [pName, collection.collection_id, color, finish, size, showName, showCode, showPrice, m2, pcs, boxP, defaultStock]);
 
-                    const newId = res[0].id;
-                    const matchingRows = await db.select(
-                        `
-                            SELECT product_id FROM inventory 
-                            WHERE (product_parent_id IS NULL OR product_parent_id = 0)
-                            AND lower(COALESCE(extracted_name, '')) = lower(COALESCE($1, ''))
-                            AND lower(COALESCE(extracted_colour, '')) = lower(COALESCE($2, ''))
-                            AND lower(COALESCE(extracted_finish, '')) = lower(COALESCE($3, ''))
-                            AND lower(COALESCE(extracted_size, '')) = lower(COALESCE($4, ''))
-                        `,
-                        [colName, color, finish, size]
-                    );
-                    if (matchingRows && matchingRows.length > 0) {
-                        const ids = matchingRows.map(r => r.product_id).join(',');
-                        await db.execute(`UPDATE inventory SET product_parent_id = ? WHERE product_id IN (${ids})`, [newId]);
-                    }
+                    targetProductId = res[0].id;
                     createdCount++;
+                }
+
+                // Link unlinked inventory records in this group
+                const unlinkedIds = group.items
+                    .filter(r => !r.product_parent_id || r.product_parent_id === 0 || r.product_parent_id === '0')
+                    .map(r => r.product_id);
+
+                if (unlinkedIds.length > 0) {
+                    const idsPlaceholder = unlinkedIds.map((_, i) => `$${i + 2}`).join(',');
+                    await db.execute(
+                        `UPDATE inventory SET product_parent_id = $1 WHERE product_id IN (${idsPlaceholder})`,
+                        [targetProductId, ...unlinkedIds]
+                    );
+                    linkedCount += unlinkedIds.length;
+                }
+
+                // Normalize extracted_size in inventory for records with non-normalized format
+                const sizeMismatchIds = group.items
+                    .filter(r => r.extracted_size && r.extracted_size !== size)
+                    .map(r => r.product_id);
+
+                if (sizeMismatchIds.length > 0) {
+                    const idsPlaceholder = sizeMismatchIds.map((_, i) => `$${i + 2}`).join(',');
+                    await db.execute(
+                        `UPDATE inventory SET extracted_size = $1 WHERE product_id IN (${idsPlaceholder})`,
+                        [size, ...sizeMismatchIds]
+                    );
                 }
             }
 
             if (createdCount > 0) {
                 alert(`Auto match complete. Created ${createdCount} new product(s).`);
+                loadData();
+            } else if (linkedCount > 0) {
+                alert(`Auto match complete. Linked ${linkedCount} inventory record(s) to existing products.`);
                 loadData();
             } else {
                 alert("Auto match complete. No new products needed to be created.");
@@ -293,15 +339,30 @@ export default function Products() {
             const db = await getDb();
             const pId = productFormData.product_id || productFormData.id;
             const col = collections.find(c => c.collection_id.toString() === (productFormData.collection_id || '').toString());
-            const colName = col ? col.collection_name : '';
-            const color = productFormData.color || colorInput || '';
-            const finish = productFormData.finish || finishInput || '';
-            const size = productFormData.size || '';
+            const colName = (col ? col.collection_name : '').trim();
+            const color = (productFormData.color || colorInput || '').trim();
+            const finish = (productFormData.finish || finishInput || '').trim();
+            const size = (productFormData.size || '').trim();
 
-            let query = `SELECT * FROM inventory WHERE (backorder IS NULL OR backorder != 1) AND (product_parent_id = $1 OR (lower(extracted_name) = lower($2) AND lower(extracted_colour) = lower($3) AND lower(extracted_finish) = lower($4) AND lower(extracted_size) = lower($5))) ORDER BY product_id DESC LIMIT 1`;
-            let params = [pId || -1, colName, color, finish, size];
+            let invs = [];
+            if (pId) {
+                invs = await db.select(
+                    `SELECT * FROM inventory WHERE product_parent_id = $1 AND (backorder IS NULL OR backorder != 1) ORDER BY product_id DESC LIMIT 1`,
+                    [pId]
+                );
+            }
+            if (!invs || invs.length === 0) {
+                const candidates = await db.select(
+                    `SELECT * FROM inventory WHERE (backorder IS NULL OR backorder != 1) AND lower(trim(extracted_name)) = lower(trim($1)) AND lower(trim(extracted_colour)) = lower(trim($2)) AND lower(trim(extracted_finish)) = lower(trim($3)) ORDER BY product_id DESC`,
+                    [colName, color, finish]
+                );
+                const normSize = normalizeSize(size);
+                const matched = candidates.find(c => normalizeSize(c.extracted_size) === normSize);
+                if (matched) {
+                    invs = [matched];
+                }
+            }
 
-            const invs = await db.select(query, params);
             if (invs && invs.length > 0) {
                 const inv = invs[0];
                 let newShowtileCode = '';
@@ -525,7 +586,7 @@ export default function Products() {
                                                                         <td style={{ padding: '12px 8px', fontSize: '0.9rem', color: '#475569' }}>{product.finish}</td>
                                                                         <td style={{ padding: '12px 8px', fontSize: '0.9rem', color: '#475569' }}>{product.size}</td>
                                                                         <td style={{ padding: '12px 8px', fontSize: '0.9rem', color: '#475569' }}>{renderPriceColumn(product.st_id, null, null, true, product.showtile_price)}</td>
-                                                                        <td style={{ padding: '12px 8px', fontSize: '0.9rem', color: '#475569' }}>{renderPriceColumn(product.cht_id, product.cht_regular_price, product.cht_sales_price)}</td>
+                                                                        <td style={{ padding: '12px 8px', fontSize: '0.9rem', color: '#475569' }}>{renderPriceColumn(product.cht_shopify_id || product.cht_id, product.cht_regular_price, product.cht_sales_price)}</td>
                                                                         <td style={{ padding: '12px 8px', fontSize: '0.9rem', color: '#475569' }}>{renderPriceColumn(product.gto_id, product.gto_regular_price, product.gto_sales_price)}</td>
                                                                         <td style={{ padding: '12px 8px', fontSize: '0.9rem', color: '#475569' }}>
                                                                             <div style={{ display: 'flex', gap: '16px' }}>

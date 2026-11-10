@@ -14,7 +14,7 @@ export default function ComingProducts({ isActive }) {
     const [filterEstDateFrom, setFilterEstDateFrom] = useState('');
     const [filterEstDateTo, setFilterEstDateTo] = useState('');
     const [searchQuery, setSearchQuery] = useState('');
-    const [sortConfig, setSortConfig] = useState({ key: 'delivery', direction: 'asc' });
+    const [sortConfig, setSortConfig] = useState({ key: 'default', direction: 'asc' });
 
     const [lastUpdated, setLastUpdated] = useState('');
     const [isRefreshing, setIsRefreshing] = useState(false);
@@ -125,22 +125,75 @@ export default function ComingProducts({ isActive }) {
         setFilteredBatches(result);
     };
 
+    const getBatchUpcomingDate = (batch, fieldKey, todayStr) => {
+        if (!batch.containers || batch.containers.length === 0) return null;
+        const activeContainers = batch.containers.filter(c => !isContainerDelivered(c, todayStr));
+        const targetContainers = activeContainers.length > 0 ? activeContainers : batch.containers;
+        const validDates = targetContainers
+            .map(c => c[fieldKey])
+            .filter(d => d && String(d).trim() !== '' && String(d).toLowerCase() !== 'null')
+            .sort();
+        return validDates.length > 0 ? validDates[0] : null;
+    };
+
     const sortedBatches = [...filteredBatches].sort((a, b) => {
-        const key = sortConfig.key || 'delivery'; // 'delivery' or 'eta'
+        const key = sortConfig.key || 'default';
+        const todayStr = getLocalTodayStrSync();
 
-        const getBatchSortDate = (batch) => {
-            if (!batch.containers || batch.containers.length === 0) return null;
-            const validDates = batch.containers
-                .map(c => c[key])
-                .filter(d => d && String(d).trim() !== '')
-                .sort();
-            return validDates.length > 0 ? validDates[0] : null;
-        };
+        const isPendingA = !a.status || a.status === 'pending' || !a.containers || a.containers.length === 0;
+        const isPendingB = !b.status || b.status === 'pending' || !b.containers || b.containers.length === 0;
 
-        const dateA = getBatchSortDate(a);
-        const dateB = getBatchSortDate(b);
+        // Pending records are ALWAYS at the bottom across all sorting modes
+        if (isPendingA && !isPendingB) return 1;
+        if (!isPendingA && isPendingB) return -1;
+        if (isPendingA && isPendingB) {
+            return (a.sku || '').localeCompare(b.sku || '');
+        }
 
-        // Batches without date/containers must ALWAYS be placed at the very bottom
+        // Both are In Transit:
+        if (key === 'default') {
+            const delA = getBatchUpcomingDate(a, 'delivery', todayStr);
+            const delB = getBatchUpcomingDate(b, 'delivery', todayStr);
+            const etaA = getBatchUpcomingDate(a, 'eta', todayStr);
+            const etaB = getBatchUpcomingDate(b, 'eta', todayStr);
+
+            // Tier 1: In Transit with Delivery Date (and ETA)
+            // Tier 2: In Transit with ETA, but no Delivery Date
+            // Tier 3: In Transit with neither ETA nor Delivery Date
+            const tierA = delA ? 1 : (etaA ? 2 : 3);
+            const tierB = delB ? 1 : (etaB ? 2 : 3);
+
+            if (tierA !== tierB) {
+                return tierA - tierB;
+            }
+
+            // Within Tier 1: sorted by Delivery Date near to far (ascending)
+            if (tierA === 1) {
+                if (delA !== delB) {
+                    return sortConfig.direction === 'asc' ? (delA < delB ? -1 : 1) : (delA > delB ? -1 : 1);
+                }
+                if (etaA && etaB && etaA !== etaB) {
+                    return sortConfig.direction === 'asc' ? (etaA < etaB ? -1 : 1) : (etaA > etaB ? -1 : 1);
+                }
+                return (a.sku || '').localeCompare(b.sku || '');
+            }
+
+            // Within Tier 2: sorted by ETA near to far (ascending)
+            if (tierA === 2) {
+                if (etaA !== etaB) {
+                    return sortConfig.direction === 'asc' ? (etaA < etaB ? -1 : 1) : (etaA > etaB ? -1 : 1);
+                }
+                return (a.sku || '').localeCompare(b.sku || '');
+            }
+
+            // Within Tier 3: In Transit without ETA or Delivery Date
+            return (a.sku || '').localeCompare(b.sku || '');
+        }
+
+        // If key is 'delivery' or 'eta':
+        const dateA = getBatchUpcomingDate(a, key, todayStr);
+        const dateB = getBatchUpcomingDate(b, key, todayStr);
+
         if (!dateA && !dateB) {
             return (a.sku || '').localeCompare(b.sku || '');
         }
@@ -388,6 +441,7 @@ export default function ComingProducts({ isActive }) {
                             onChange={(e) => setSortConfig(prev => ({ ...prev, key: e.target.value }))}
                             style={{ padding: '6px 10px', border: '1px solid #cbd5e1', borderRadius: '4px', fontSize: '0.85rem', outline: 'none', backgroundColor: 'white' }}
                         >
+                            <option value="default">Default</option>
                             <option value="delivery">Delivery Date</option>
                             <option value="eta">ETA</option>
                         </select>
@@ -497,10 +551,10 @@ export default function ComingProducts({ isActive }) {
                                             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.85rem', textAlign: 'left' }}>
                                                 <thead>
                                                     <tr style={{ backgroundColor: '#f8fafc', borderBottom: '1px solid #e2e8f0' }}>
-                                                        <th style={{ padding: '8px 12px', fontWeight: 600, color: '#475569' }}>Container No.</th>
-                                                        <th style={{ padding: '8px 12px', fontWeight: 600, color: '#475569', textAlign: 'right' }}>Amount</th>
-                                                        <th style={{ padding: '8px 12px', fontWeight: 600, color: '#475569', textAlign: 'center' }}>ETA</th>
-                                                        <th style={{ padding: '8px 12px', fontWeight: 600, color: '#475569', textAlign: 'center' }}>Delivery Date</th>
+                                                        <th style={{ padding: '8px 12px', width: '50%', fontWeight: 600, color: '#475569' }}>Container No.</th>
+                                                        <th style={{ padding: '8px 12px', width: '14%', fontWeight: 600, color: '#475569', textAlign: 'right' }}>Amount</th>
+                                                        <th style={{ padding: '8px 12px', width: '18%', fontWeight: 600, color: '#475569', textAlign: 'center' }}>ETA</th>
+                                                        <th style={{ padding: '8px 12px', width: '18%', fontWeight: 600, color: '#475569', textAlign: 'center' }}>Delivery Date</th>
                                                     </tr>
                                                 </thead>
                                                 <tbody>

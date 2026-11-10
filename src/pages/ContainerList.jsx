@@ -1305,7 +1305,7 @@ export default function ContainerList({ currentUser, onNavigateToShipment, isAct
                         />
                     </div>
                     <MultiSelectDropdown
-                        label="Shippers"
+                        label="Factory"
                         options={Array.from(new Map(Object.values(shippersMap).map(s => [s.id, { value: s.id.toString(), label: s.name }])).values()).sort((a, b) => a.label.localeCompare(b.label))}
                         selected={filterShipper}
                         onChange={setFilterShipper}
@@ -1363,7 +1363,7 @@ export default function ContainerList({ currentUser, onNavigateToShipment, isAct
                                         {canWrite && <th style={{ width: '80px', minWidth: '80px', textAlign: 'center' }}>Actions</th>}
                                         {activeCols.includes('cntr_no') && <th className="has-sort-icon" style={{ width: '130px', minWidth: '130px', cursor: 'pointer' }} onClick={() => handleSort('cntr_no')}><SortIcon columnKey="cntr_no" /> Container No. </th>}
                                         {activeCols.includes('hbl_no') && <th className="has-sort-icon" style={{ width: '120px', minWidth: '120px', cursor: 'pointer' }} onClick={() => handleSort('hbl_no')}><SortIcon columnKey="hbl_no" /> HBL No.</th>}
-                                        {activeCols.includes('shipper') && <th className="has-sort-icon" style={{ width: '150px', minWidth: '150px', cursor: 'pointer' }} onClick={() => handleSort('shipper')}><SortIcon columnKey="shipper" /> Shipper</th>}
+                                        {activeCols.includes('shipper') && <th className="has-sort-icon" style={{ width: '150px', minWidth: '150px', cursor: 'pointer' }} onClick={() => handleSort('shipper')}><SortIcon columnKey="shipper" /> Factory</th>}
                                         {activeCols.includes('invoice_no') && <th className="has-sort-icon" style={{ width: '120px', minWidth: '120px', cursor: 'pointer' }} onClick={() => handleSort('invoice_no')}><SortIcon columnKey="invoice_no" /> Invoice No.</th>}
                                         {activeCols.includes('payment') && <th style={{ width: '240px', minWidth: '240px' }}>Payment</th>}
                                         {activeCols.includes('doc') && <th style={{ width: '60px', minWidth: '60px' }}>Doc</th>}
@@ -1567,9 +1567,9 @@ export default function ContainerList({ currentUser, onNavigateToShipment, isAct
                                                     {activeCols.includes('delivery') && <td>
                                                         <div className="readonly-cell">
                                                             {canWrite ? (
-                                                                <DeliveryInput 
-                                                                    initialValue={row.delivery} 
-                                                                    onSave={(val) => handleDeliveryChange(row.container_id, val)} 
+                                                                <DeliveryInput
+                                                                    initialValue={row.delivery}
+                                                                    onSave={(val) => handleDeliveryChange(row.container_id, val)}
                                                                 />
                                                             ) : (
                                                                 formatDate(row.delivery)

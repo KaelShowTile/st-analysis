@@ -74,6 +74,7 @@
     border-radius: 5px;
     cursor: pointer;
     font-weight: 600;
+    padding: 0 12px;
 }
 
 .attributes-list {
@@ -171,8 +172,13 @@
 }
 
 @keyframes spin {
-    from { transform: rotate(0deg); }
-    to { transform: rotate(360deg); }
+    from {
+        transform: rotate(0deg);
+    }
+
+    to {
+        transform: rotate(360deg);
+    }
 }
 
 .spin-animation {

@@ -7,6 +7,7 @@ import { Trash2, Plus, Download, Upload, DatabaseBackup, RotateCcw, FolderOpen, 
 import { appDataDir, join, dirname } from '@tauri-apps/api/path';
 import { readDir, copyFile, exists, mkdir } from '@tauri-apps/plugin-fs';
 import { load } from '@tauri-apps/plugin-store';
+import { fetch as tauriFetch } from '@tauri-apps/plugin-http';
 import { getSyncConfig, saveSyncConfig, getQueueStats, triggerFullSync, testWorkerConnection, forceResetDatabase } from '../utils/syncService';
 
 export default function Settings({ currentUser, isActive }) {
@@ -41,6 +42,9 @@ export default function Settings({ currentUser, isActive }) {
     const [chtEndpoint, setChtEndpoint] = useState('');
     const [chtKey, setChtKey] = useState('');
     const [chtFeed, setChtFeed] = useState('');
+    const [chtShopifyDomain, setChtShopifyDomain] = useState('');
+    const [chtShopifyAccessToken, setChtShopifyAccessToken] = useState('');
+    const [isTestingShopify, setIsTestingShopify] = useState(false);
     const [stEndpoint, setStEndpoint] = useState('');
     const [stKey, setStKey] = useState('');
     const [stFeed, setStFeed] = useState('');
@@ -67,6 +71,7 @@ export default function Settings({ currentUser, isActive }) {
             oceanShippers: { read: false, write: false },
             comingProducts: { read: false, write: false },
             comingContainer: { read: false, write: false },
+            orderBatches: { read: false, write: false },
             costReport: { read: false, write: false }
         }
     });
@@ -98,6 +103,8 @@ export default function Settings({ currentUser, isActive }) {
             setChtEndpoint(await store.get('cht_endpoint') || '');
             setChtKey(await store.get('cht_key') || '');
             setChtFeed(await store.get('cht_feed') || '');
+            setChtShopifyDomain(await store.get('cht_shopify_domain') || '');
+            setChtShopifyAccessToken(await store.get('cht_shopify_access_token') || '');
 
             setStEndpoint(await store.get('st_endpoint') || '');
             setStKey(await store.get('st_key') || '');
@@ -323,6 +330,9 @@ export default function Settings({ currentUser, isActive }) {
             await store.set('cht_endpoint', chtEndpoint);
             await store.set('cht_key', chtKey);
             await store.set('cht_feed', chtFeed);
+            await store.set('cht_shopify_domain', (chtShopifyDomain || '').trim());
+            await store.set('cht_shopify_access_token', (chtShopifyAccessToken || '').trim());
+
             await store.set('st_endpoint', stEndpoint);
             await store.set('st_key', stKey);
             await store.set('st_feed', stFeed);
@@ -336,6 +346,35 @@ export default function Settings({ currentUser, isActive }) {
         } catch (e) {
             console.error("Failed to save Website settings:", e);
             alert("Failed to save configuration.");
+        }
+    };
+
+    const handleTestShopify = async () => {
+        const domain = (chtShopifyDomain || '').replace(/^https?:\/\//i, '').replace(/\/+$/, '').trim();
+        const token = (chtShopifyAccessToken || '').trim();
+        if (!domain || !token) {
+            alert("Please enter both Shopify Domain and Access Token before testing.");
+            return;
+        }
+        setIsTestingShopify(true);
+        try {
+            const res = await tauriFetch(`https://${domain}/admin/api/2024-01/shop.json`, {
+                headers: {
+                    'X-Shopify-Access-Token': token,
+                    'Content-Type': 'application/json'
+                }
+            });
+            if (res.ok) {
+                const data = await res.json();
+                alert(`Connected to Shopify successfully! Store: ${data.shop?.name || domain}`);
+            } else {
+                alert(`Failed to connect to Shopify. Status: ${res.status} (${res.statusText || 'Check token and domain'})`);
+            }
+        } catch (err) {
+            console.error("Shopify test connection error:", err);
+            alert("Network error connecting to Shopify: " + err.message);
+        } finally {
+            setIsTestingShopify(false);
         }
     };
 
@@ -923,19 +962,58 @@ export default function Settings({ currentUser, isActive }) {
                     </div>
                     {/* CHT Settings */}
                     <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '12px', background: 'var(--surface-color)', padding: '16px', borderRadius: '6px', border: '1px solid var(--border-color)' }}>
-                        <h4 style={{ margin: '0 0 8px 0', borderBottom: '1px solid #e2e8f0', paddingBottom: '8px' }}>CHT Website</h4>
+                        <h4 style={{ margin: '0 0 8px 0', borderBottom: '1px solid #e2e8f0', paddingBottom: '8px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <span>CHT Website (Shopify)</span>
+                            <span style={{ fontSize: '0.75rem', color: '#10b981', fontWeight: 'normal' }}>Shopify</span>
+                        </h4>
                         <div>
-                            <label className="form-label" style={{ fontWeight: 'bold' }}>Endpoint URL</label>
-                            <input type="text" className="form-input" value={chtEndpoint} onChange={e => setChtEndpoint(e.target.value)} placeholder="https://cht.example.com/wp-json/wc/v3" />
+                            <label className="form-label" style={{ fontWeight: 'bold' }}>Shopify Store Domain</label>
+                            <input
+                                type="text"
+                                className="form-input"
+                                value={chtShopifyDomain}
+                                onChange={e => setChtShopifyDomain(e.target.value)}
+                                placeholder="your-store.myshopify.com"
+                            />
                         </div>
                         <div>
-                            <label className="form-label" style={{ fontWeight: 'bold' }}>API Key</label>
-                            <input type="text" className="form-input" value={chtKey} onChange={e => setChtKey(e.target.value)} placeholder="ck_..." />
+                            <label className="form-label" style={{ fontWeight: 'bold' }}>Admin API Access Token</label>
+                            <input
+                                type="password"
+                                className="form-input"
+                                value={chtShopifyAccessToken}
+                                onChange={e => setChtShopifyAccessToken(e.target.value)}
+                                placeholder="shpat_..."
+                            />
                         </div>
                         <div>
-                            <label className="form-label" style={{ fontWeight: 'bold' }}>Product Feed URL</label>
-                            <input type="text" className="form-input" value={chtFeed} onChange={e => setChtFeed(e.target.value)} placeholder="https://cht.example.com/feed.json" />
+                            <button
+                                type="button"
+                                className="btn-secondary"
+                                onClick={handleTestShopify}
+                                disabled={isTestingShopify}
+                                style={{ width: '100%', padding: '6px 12px', fontSize: '0.8rem' }}
+                            >
+                                {isTestingShopify ? 'Testing Connection...' : 'Test Shopify Connection'}
+                            </button>
                         </div>
+                        <details style={{ marginTop: '4px', fontSize: '0.8rem', color: '#64748b' }}>
+                            <summary style={{ cursor: 'pointer', userSelect: 'none' }}>Legacy WooCommerce Settings</summary>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '8px' }}>
+                                <div>
+                                    <label className="form-label">Endpoint URL</label>
+                                    <input type="text" className="form-input" value={chtEndpoint} onChange={e => setChtEndpoint(e.target.value)} placeholder="https://cht.example.com/wp-json/wc/v3" />
+                                </div>
+                                <div>
+                                    <label className="form-label">API Key</label>
+                                    <input type="text" className="form-input" value={chtKey} onChange={e => setChtKey(e.target.value)} placeholder="ck_..." />
+                                </div>
+                                <div>
+                                    <label className="form-label">Product Feed URL</label>
+                                    <input type="text" className="form-input" value={chtFeed} onChange={e => setChtFeed(e.target.value)} placeholder="https://cht.example.com/feed.json" />
+                                </div>
+                            </div>
+                        </details>
                     </div>
 
                     {/* GTO Settings */}
@@ -1212,6 +1290,7 @@ export default function Settings({ currentUser, isActive }) {
                                     oceanShippers: { read: false, write: false },
                                     comingProducts: { read: false, write: false },
                                     comingContainer: { read: false, write: false },
+                                    orderBatches: { read: false, write: false },
                                     costReport: { read: false, write: false },
                                     admin: false
                                 }
@@ -1252,6 +1331,7 @@ export default function Settings({ currentUser, isActive }) {
                                                 oceanShippers: { read: false, write: false },
                                                 comingProducts: { read: false, write: false },
                                                 comingContainer: { read: false, write: false },
+                                                orderBatches: { read: false, write: false },
                                                 costReport: { read: false, write: false },
                                                 admin: false,
                                                 ...u.permissions

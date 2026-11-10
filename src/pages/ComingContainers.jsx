@@ -161,11 +161,16 @@ export default function ComingContainers({ isActive }) {
             valB = getRowParsedData(b).productsList.join(', ');
         }
 
-        // Rule: Records without ETA / date value must ALWAYS be placed at the very bottom
-        const isEmptyA = valA === null || valA === undefined || String(valA).trim() === '';
-        const isEmptyB = valB === null || valB === undefined || String(valB).trim() === '';
+        // Rule: Records without ETA / Delivery date value must ALWAYS be placed at the very bottom
+        const isEmptyA = valA === null || valA === undefined || String(valA).trim() === '' || String(valA).toLowerCase() === 'null';
+        const isEmptyB = valB === null || valB === undefined || String(valB).trim() === '' || String(valB).toLowerCase() === 'null';
 
-        if (isEmptyA && isEmptyB) return 0;
+        if (isEmptyA && isEmptyB) {
+            const etaA = a.eta || '';
+            const etaB = b.eta || '';
+            if (etaA && etaB && etaA !== etaB) return etaA < etaB ? -1 : 1;
+            return (a.cntr_no || '').localeCompare(b.cntr_no || '');
+        }
         if (isEmptyA) return 1;
         if (isEmptyB) return -1;
 
@@ -173,7 +178,7 @@ export default function ComingContainers({ isActive }) {
         const strB = String(valB);
         if (strA < strB) return sortConfig.direction === 'asc' ? -1 : 1;
         if (strA > strB) return sortConfig.direction === 'asc' ? 1 : -1;
-        return 0;
+        return (a.cntr_no || '').localeCompare(b.cntr_no || '');
     });
 
     const formatDate = (dateStr) => {
@@ -362,6 +367,7 @@ export default function ComingContainers({ isActive }) {
                             style={{ padding: '6px 10px', border: '1px solid #cbd5e1', borderRadius: '4px', fontSize: '0.85rem', outline: 'none', backgroundColor: 'white' }}
                         >
                             <option value="eta">ETA</option>
+                            <option value="delivery">Arrival Date</option>
                             <option value="cntr_no">Container No.</option>
                         </select>
                         <button
@@ -415,7 +421,7 @@ export default function ComingContainers({ isActive }) {
                                                 <div style={{ display: 'flex', gap: '8px', marginTop: '4px', alignItems: 'center' }}>
                                                     {row.delivery ? (
                                                         <span style={{ fontSize: '0.75rem', fontWeight: 600, padding: '2px 8px', borderRadius: '10px', backgroundColor: '#dcfce7', color: '#15803d' }}>
-                                                            Delivery: {formatDate(row.delivery)}
+                                                            Arrival Date: {formatDate(row.delivery)}
                                                         </span>
                                                     ) : (
                                                         <span style={{ fontSize: '0.75rem', fontWeight: 600, padding: '2px 8px', borderRadius: '10px', backgroundColor: '#f1f5f9', color: '#475569' }}>

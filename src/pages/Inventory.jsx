@@ -3,98 +3,10 @@ import Papa from 'papaparse';
 import { Upload, Search, Trash2, Edit3, X, Save } from 'lucide-react';
 import { getDb } from '../db/Database';
 import { getLocalTodayStrSync } from '../utils/timezone';
+import { normalizeSize, findBestMatch, extractFeatures } from '../utils/featureExtractor';
 import './Inventory.css';
 
-
-const extractFeatures = (salesDesc, colours, finishes) => {
-    let text = salesDesc;
-    let startIndex = text.indexOf(')');
-    let endIndex = text.indexOf('[');
-
-    if (startIndex === -1) startIndex = 0;
-    else startIndex += 1;
-
-    if (endIndex === -1) endIndex = text.length;
-
-    if (startIndex < endIndex) {
-        text = text.substring(startIndex, endIndex).trim();
-    } else {
-        text = text.trim();
-    }
-
-    let extractedSize = '';
-    let extractedFinish = '';
-    let extractedColour = '';
-    let extractedName = '';
-
-    let firstParamIndex = -1;
-    let lastParamIndex = -1;
-
-    const findMatch = (list, str) => {
-        for (const item of list) {
-            const regex = new RegExp(`\\b${item}\\b`, 'i');
-            const match = str.match(regex);
-            if (match) {
-                return { item, index: match.index, length: match[0].length };
-            }
-        }
-        return null;
-    };
-
-    const colourMatch = findMatch(colours, text);
-    const finishMatch = findMatch(finishes, text);
-
-    if (colourMatch) {
-        extractedColour = colourMatch.item;
-        firstParamIndex = colourMatch.index;
-        lastParamIndex = colourMatch.index + colourMatch.length;
-    }
-
-    if (finishMatch) {
-        extractedFinish = finishMatch.item;
-        if (firstParamIndex === -1 || finishMatch.index < firstParamIndex) {
-            firstParamIndex = finishMatch.index;
-        }
-        const endIdx = finishMatch.index + finishMatch.length;
-        if (endIdx > lastParamIndex) {
-            lastParamIndex = endIdx;
-        }
-    }
-
-    const sizeRegex = /\b\d+(?:\.\d+)?\s*[xX]\s*\d+(?:\.\d+)?(?:\s*[xX]\s*\d+(?:\.\d+)?)?\b/;
-
-    if (firstParamIndex !== -1) {
-        extractedName = text.substring(0, firstParamIndex).trim();
-        let remainder = text.substring(lastParamIndex).trim();
-        const slashIndex = remainder.indexOf('/');
-        if (slashIndex !== -1) {
-            remainder = remainder.substring(0, slashIndex).trim();
-        }
-        const sizeMatch = remainder.match(sizeRegex);
-        if (sizeMatch) {
-            extractedSize = sizeMatch[0];
-        }
-    } else {
-        const sizeMatch = text.match(sizeRegex);
-        if (sizeMatch) {
-            extractedSize = sizeMatch[0];
-            extractedName = text.substring(0, sizeMatch.index).trim();
-        } else {
-            extractedName = text.trim();
-        }
-    }
-
-    const backorder = salesDesc.toLowerCase().includes('backorder') ? 1 : 0;
-    let backorder_amount = 0;
-    if (backorder) {
-        const match = salesDesc.match(/backorder-?(\d+(?:\.\d+)?)/i);
-        if (match && match[1]) {
-            backorder_amount = parseFloat(match[1]);
-        }
-    }
-
-    return { extractedName, extractedColour, extractedFinish, extractedSize, backorder, backorder_amount };
-};
+export { normalizeSize, findBestMatch, extractFeatures };
 
 export default function Inventory({ currentUser }) {
     const [data, setData] = useState([]);
@@ -139,8 +51,8 @@ export default function Inventory({ currentUser }) {
         try {
             const db = await getDb();
             const attributes = await db.select('SELECT * FROM attributes');
-            const colours = attributes.filter(a => a.type === 'colour').map(a => a.value.toLowerCase());
-            const finishes = attributes.filter(a => a.type === 'finish').map(a => a.value.toLowerCase());
+            const colours = attributes.filter(a => a.type === 'colour').map(a => a.value.trim());
+            const finishes = attributes.filter(a => a.type === 'finish').map(a => a.value.trim());
 
             // Retrieve all rows where extracted_name is empty or null
             const rows = await db.select("SELECT product_id, sku, sales_description, product_parent_id FROM inventory WHERE extracted_name IS NULL OR extracted_name = ''");
@@ -198,8 +110,8 @@ export default function Inventory({ currentUser }) {
                 }
             }
 
-            const colours = attributes.filter(a => a.type === 'colour').map(a => a.value.toLowerCase());
-            const finishes = attributes.filter(a => a.type === 'finish').map(a => a.value.toLowerCase());
+            const colours = attributes.filter(a => a.type === 'colour').map(a => a.value.trim());
+            const finishes = attributes.filter(a => a.type === 'finish').map(a => a.value.trim());
 
             try {
                 const parseNumber = (val) => {

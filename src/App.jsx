@@ -256,7 +256,7 @@ function App() {
                 Reports
               </li>
             )}
-            {(p.containerDashboard?.read || p.shipmentOrders?.read || p.containerList?.read || p.shippers?.read || p.comingProducts?.read || p.comingContainer?.read) && (
+            {(p.containerDashboard?.read || p.shipmentOrders?.read || p.purchaseOrders?.read || p.containerList?.read || p.shippers?.read || p.comingProducts?.read || p.comingContainer?.read || p.orderBatches?.read) && (
               <li className={`nav-item ${activeTab === 'containers' ? 'active' : ''}`} onClick={() => navigateTo('containers')}>
                 <Box size={18} />
                 Containers
@@ -324,7 +324,7 @@ function App() {
               <CostReport currentUser={currentUser} isActive={activeTab === 'accounting'} />
             </div>
           )}
-          {(p.containerDashboard?.read || p.shipmentOrders?.read || p.containerList?.read || p.shippers?.read || p.comingProducts?.read || p.comingContainer?.read) && (
+          {(p.containerDashboard?.read || p.shipmentOrders?.read || p.purchaseOrders?.read || p.containerList?.read || p.shippers?.read || p.comingProducts?.read || p.comingContainer?.read || p.orderBatches?.read) && (
             <div style={{ display: activeTab === 'containers' ? 'block' : 'none', height: '100%' }}>
               <Containers currentUser={currentUser} isActive={activeTab === 'containers'} externalShipmentId={selectedShipmentId} onClearExternalShipment={() => setSelectedShipmentId(null)} />
             </div>

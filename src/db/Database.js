@@ -308,13 +308,19 @@ const initializeTables = async (db) => {
             box_per_pallet REAL,
             st_id TEXT,
             st_name TEXT,
-            suffix TEXT
+            suffix TEXT,
+            cht_shopify_id TEXT,
+            cht_shopify_name TEXT,
+            cht_shopify_inventory_item_id TEXT
         )
     `);
 
     try { await db.execute("ALTER TABLE products ADD COLUMN st_id TEXT"); } catch (e) { }
     try { await db.execute("ALTER TABLE products ADD COLUMN st_name TEXT"); } catch (e) { }
     try { await db.execute("ALTER TABLE products ADD COLUMN suffix TEXT"); } catch (e) { }
+    try { await db.execute("ALTER TABLE products ADD COLUMN cht_shopify_id TEXT"); } catch (e) { }
+    try { await db.execute("ALTER TABLE products ADD COLUMN cht_shopify_name TEXT"); } catch (e) { }
+    try { await db.execute("ALTER TABLE products ADD COLUMN cht_shopify_inventory_item_id TEXT"); } catch (e) { }
 
     await db.execute(`
         CREATE TABLE IF NOT EXISTS attributes (

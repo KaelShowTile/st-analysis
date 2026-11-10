@@ -85,6 +85,24 @@ export default function PurchaseOrders({ currentUser, isActive }) {
         applyFilters();
     }, [orders, filterShipper, filterStatus, searchQuery]);
 
+    const ORDERS_QUERY = `
+        SELECT po.*, 
+               COALESCE(b_sum.paid_balance, 0) as paid_balance
+        FROM purchase_orders po
+        LEFT JOIN (
+            SELECT order_id, SUM(balance) as paid_balance
+            FROM (
+                SELECT DISTINCT ob.order_batch_id, COALESCE(ob.order_id, so.order_id) as order_id, COALESCE(ob.balance, 0) as balance
+                FROM order_batch ob
+                LEFT JOIN container_order_batch cob ON ob.order_batch_id = cob.order_batch_id
+                LEFT JOIN shipping_order so ON cob.shipping_order_id = so.shipping_order_id
+                WHERE ob.order_id IS NOT NULL OR so.order_id IS NOT NULL
+            )
+            GROUP BY order_id
+        ) b_sum ON po.order_id = b_sum.order_id
+        ORDER BY po.order_id DESC
+    `;
+
     const loadInitialData = async () => {
         try {
             const db = await getDb();
@@ -94,7 +112,7 @@ export default function PurchaseOrders({ currentUser, isActive }) {
                 shippersLoadedRef.current ? Promise.resolve(null) : db.select('SELECT * FROM shippers ORDER BY shipper_name ASC'),
                 productsLoadedRef.current ? Promise.resolve(null) : db.select('SELECT product_id, product_name, showtile_price FROM products ORDER BY product_name ASC'),
                 db.select("SELECT value FROM settings WHERE key = 'purchase_orders_columns'"),
-                db.select('SELECT * FROM purchase_orders ORDER BY order_id DESC')
+                db.select(ORDERS_QUERY)
             ]);
 
             if (sRes) {
@@ -119,7 +137,7 @@ export default function PurchaseOrders({ currentUser, isActive }) {
     const loadOrders = async () => {
         try {
             const db = await getDb();
-            const res = await db.select('SELECT * FROM purchase_orders ORDER BY order_id DESC');
+            const res = await db.select(ORDERS_QUERY);
             setOrders(res);
         } catch (e) {
             console.error("Failed to load purchase orders", e);
@@ -145,6 +163,32 @@ export default function PurchaseOrders({ currentUser, isActive }) {
         } catch (e) {
             return [];
         }
+    };
+
+    const getOrderPaymentInfo = (row) => {
+        let totalPOValue = 0;
+        const prods = parseOrderProducts(row.products);
+        if (Array.isArray(prods)) {
+            totalPOValue = prods.reduce((sum, p) => sum + (parseFloat(p.price) || 0) * (parseFloat(p.amount) || 0), 0);
+        }
+
+        const depositAmount = parseFloat(row.deposit_amount) || 0;
+        const isDepositPaid = row.deposit_amount !== null && row.deposit_amount !== '' && depositAmount > 0;
+
+        const totalRequiredBalance = Math.max(0, totalPOValue - depositAmount);
+        const paidBalance = parseFloat(row.paid_balance) || 0;
+
+        // Balance is completed only if all remaining balance is fully paid (allowing for minor float rounding)
+        const isBalanceCompleted = totalPOValue > 0 && (paidBalance >= totalRequiredBalance - 0.01);
+
+        return {
+            totalPOValue,
+            depositAmount,
+            isDepositPaid,
+            totalRequiredBalance,
+            paidBalance,
+            isBalanceCompleted
+        };
     };
 
     const applyFilters = () => {
@@ -335,7 +379,7 @@ export default function PurchaseOrders({ currentUser, isActive }) {
 
     const handleSaveAddOrder = async () => {
         if (!addForm.shipper_id) {
-            alert("Please select a Shipper.");
+            alert("Please select a Factory.");
             return;
         }
 
@@ -593,7 +637,7 @@ export default function PurchaseOrders({ currentUser, isActive }) {
 
     const handleSaveEditOrder = async () => {
         if (!editForm.shipper_id) {
-            alert("Please select a Shipper.");
+            alert("Please select a Factory.");
             return;
         }
 
@@ -719,8 +763,17 @@ export default function PurchaseOrders({ currentUser, isActive }) {
                     htmlRows += `<td>${getShipperName(o.shipper_id)}</td>`;
                 } else if (col === 'status') {
                     htmlRows += `<td>${o.status || 'open'}</td>`;
-                } else if (col === 'payment' || col === 'products') {
-                    htmlRows += `<td>-</td>`;
+                } else if (col === 'products') {
+                    const prods = parseOrderProducts(o.products);
+                    const prodLines = prods.map(p => p.product_name || getProductName(p.product_id) || (p.sku ? p.sku : `Product #${p.product_id}`)).filter(Boolean);
+                    htmlRows += `<td>${prodLines.join('<br/>') || '-'}</td>`;
+                } else if (col === 'payment') {
+                    const payInfo = getOrderPaymentInfo(o);
+                    const depText = payInfo.isDepositPaid ? 'Deposit: Completed' : 'Deposit: Unpaid';
+                    const balText = payInfo.isBalanceCompleted
+                        ? 'Balance: Completed'
+                        : `Balance: $${payInfo.paidBalance.toFixed(2)} / $${payInfo.totalRequiredBalance.toFixed(2)}`;
+                    htmlRows += `<td>${depText}<br/>${balText}</td>`;
                 } else {
                     htmlRows += `<td>${o[col] || ''}</td>`;
                 }
@@ -859,13 +912,13 @@ export default function PurchaseOrders({ currentUser, isActive }) {
 
                         {/* Shipper Filter */}
                         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                            <span style={{ fontSize: '0.85rem', color: '#64748b' }}>Shipper:</span>
+                            <span style={{ fontSize: '0.85rem', color: '#64748b' }}>Factory:</span>
                             <select
                                 value={filterShipper}
                                 onChange={(e) => setFilterShipper(e.target.value)}
                                 style={{ padding: '6px 10px', border: '1px solid #cbd5e1', borderRadius: '4px', fontSize: '0.85rem', outline: 'none', backgroundColor: 'white' }}
                             >
-                                <option value="">All Shippers</option>
+                                <option value="">All Factories</option>
                                 {shippers.map(s => (
                                     <option key={s.shipper_id} value={s.shipper_id}>{s.shipper_name}</option>
                                 ))}
@@ -908,23 +961,23 @@ export default function PurchaseOrders({ currentUser, isActive }) {
                                         </th>
                                     )}
                                     {visibleColumns.includes('shipper') && (
-                                        <th className="has-sort-icon" style={{ width: '180px', minWidth: '150px', cursor: 'pointer' }} onClick={() => handleSort('shipper')}>
-                                            <SortIcon columnKey="shipper" /> Shipper
+                                        <th className="has-sort-icon" style={{ width: '180px', cursor: 'pointer' }} onClick={() => handleSort('shipper')}>
+                                            <SortIcon columnKey="shipper" /> Factory
                                         </th>
                                     )}
                                     {visibleColumns.includes('invoice_no') && (
-                                        <th className="has-sort-icon" style={{ width: '150px', minWidth: '130px', cursor: 'pointer' }} onClick={() => handleSort('invoice_no')}>
+                                        <th className="has-sort-icon" style={{ width: '180px', cursor: 'pointer' }} onClick={() => handleSort('invoice_no')}>
                                             <SortIcon columnKey="invoice_no" /> Invoice No.
                                         </th>
                                     )}
                                     {visibleColumns.includes('payment') && (
-                                        <th style={{ width: '130px', minWidth: '110px' }}>Payment</th>
+                                        <th style={{ width: '220px' }}>Payment</th>
                                     )}
                                     {visibleColumns.includes('products') && (
-                                        <th style={{ width: '220px', minWidth: '180px' }}>Product</th>
+                                        <th style={{ minWidth: '300px' }}>Product</th>
                                     )}
                                     {visibleColumns.includes('note') && (
-                                        <th style={{ minWidth: '200px' }}>Note</th>
+                                        <th style={{ Width: '200px' }}>Note</th>
                                     )}
                                 </tr>
                             </thead>
@@ -965,10 +1018,108 @@ export default function PurchaseOrders({ currentUser, isActive }) {
                                             <td><div className="readonly-cell">{row.invoice_no || '-'}</div></td>
                                         )}
                                         {visibleColumns.includes('payment') && (
-                                            <td><div className="readonly-cell" style={{ color: '#94a3b8' }}>-</div></td>
+                                            <td style={{ verticalAlign: 'middle' }}>
+                                                {(() => {
+                                                    const payInfo = getOrderPaymentInfo(row);
+                                                    if (payInfo.totalPOValue === 0 && !payInfo.isDepositPaid) {
+                                                        return <div className="readonly-cell" style={{ color: '#94a3b8' }}>-</div>;
+                                                    }
+                                                    return (
+                                                        <div className="readonly-cell" style={{ display: 'flex', flexDirection: 'column', gap: '4px', padding: '6px 8px' }}>
+                                                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', whiteSpace: 'nowrap' }}>
+                                                                <span style={{ color: '#64748b', fontSize: '0.8rem', minWidth: '50px' }}>Deposit:</span>
+                                                                {payInfo.isDepositPaid ? (
+                                                                    <span style={{
+                                                                        display: 'inline-flex',
+                                                                        alignItems: 'center',
+                                                                        gap: '3px',
+                                                                        fontSize: '0.75rem',
+                                                                        fontWeight: 600,
+                                                                        color: '#15803d',
+                                                                        backgroundColor: '#dcfce7',
+                                                                        border: '1px solid #bbf7d0',
+                                                                        padding: '1px 7px',
+                                                                        borderRadius: '10px'
+                                                                    }}>
+                                                                        Paid
+                                                                    </span>
+                                                                ) : (
+                                                                    <span style={{
+                                                                        fontSize: '0.75rem',
+                                                                        color: '#64748b',
+                                                                        backgroundColor: '#f1f5f9',
+                                                                        padding: '1px 7px',
+                                                                        borderRadius: '10px'
+                                                                    }}>
+                                                                        Unpaid
+                                                                    </span>
+                                                                )}
+                                                            </div>
+                                                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', whiteSpace: 'nowrap' }}>
+                                                                <span style={{ color: '#64748b', fontSize: '0.8rem', minWidth: '50px' }}>Balance:</span>
+                                                                {payInfo.isBalanceCompleted ? (
+                                                                    <span style={{
+                                                                        display: 'inline-flex',
+                                                                        alignItems: 'center',
+                                                                        gap: '3px',
+                                                                        fontSize: '0.75rem',
+                                                                        fontWeight: 600,
+                                                                        color: '#15803d',
+                                                                        backgroundColor: '#dcfce7',
+                                                                        border: '1px solid #bbf7d0',
+                                                                        padding: '1px 7px',
+                                                                        borderRadius: '10px'
+                                                                    }}>
+                                                                        Paid
+                                                                    </span>
+                                                                ) : (
+                                                                    <span style={{
+                                                                        fontSize: '0.75rem',
+                                                                        fontWeight: payInfo.paidBalance > 0 ? 600 : 500,
+                                                                        color: payInfo.paidBalance > 0 ? '#b45309' : '#475569',
+                                                                        backgroundColor: payInfo.paidBalance > 0 ? '#fef3c7' : '#f8fafc',
+                                                                        border: '1px solid',
+                                                                        borderColor: payInfo.paidBalance > 0 ? '#fde68a' : '#e2e8f0',
+                                                                        padding: '1px 6px',
+                                                                        borderRadius: '4px'
+                                                                    }}>
+                                                                        ${payInfo.paidBalance.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} / ${payInfo.totalRequiredBalance.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                                                    </span>
+                                                                )}
+                                                            </div>
+                                                        </div>
+                                                    );
+                                                })()}
+                                            </td>
                                         )}
                                         {visibleColumns.includes('products') && (
-                                            <td><div className="readonly-cell" style={{ color: '#94a3b8' }}>-</div></td>
+                                            <td style={{ verticalAlign: 'middle' }}>
+                                                <div className="readonly-cell" style={{ display: 'flex', flexDirection: 'column', gap: '3px', padding: '6px 8px' }}>
+                                                    {(() => {
+                                                        const prods = parseOrderProducts(row.products);
+                                                        if (prods.length === 0) {
+                                                            return <span style={{ color: '#94a3b8' }}>-</span>;
+                                                        }
+                                                        return prods.map((p, pIdx) => {
+                                                            const prodName = p.product_name || getProductName(p.product_id) || (p.sku ? p.sku : `Product #${p.product_id}`);
+                                                            return (
+                                                                <div
+                                                                    key={pIdx}
+                                                                    style={{
+                                                                        fontSize: '0.85rem',
+                                                                        color: '#1e293b',
+                                                                        lineHeight: 1.35,
+                                                                        wordBreak: 'break-word'
+                                                                    }}
+                                                                    title={prodName}
+                                                                >
+                                                                    {prodName}
+                                                                </div>
+                                                            );
+                                                        });
+                                                    })()}
+                                                </div>
+                                            </td>
                                         )}
                                         {visibleColumns.includes('note') && (
                                             <td><div className="readonly-cell" style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{row.note || ''}</div></td>
@@ -996,14 +1147,14 @@ export default function PurchaseOrders({ currentUser, isActive }) {
                             {/* 1. Select Shipper */}
                             <div className="form-group" style={{ margin: 0 }}>
                                 <label style={{ display: 'block', marginBottom: '6px', fontWeight: 500, fontSize: '0.9rem', color: '#475569' }}>
-                                    Select Shipper <span style={{ color: '#ef4444' }}>*</span>
+                                    Select Factory <span style={{ color: '#ef4444' }}>*</span>
                                 </label>
                                 <select
                                     className="form-control"
                                     value={addForm.shipper_id}
                                     onChange={(e) => handleAddShipperChange(e.target.value)}
                                 >
-                                    <option value="">-- Choose Shipper --</option>
+                                    <option value="">-- Choose Factory --</option>
                                     {shippers.map(s => (
                                         <option key={s.shipper_id} value={s.shipper_id}>
                                             {s.shipper_name} {s.deposit ? `(Deposit: ${s.deposit}%)` : ''}
@@ -1157,7 +1308,7 @@ export default function PurchaseOrders({ currentUser, isActive }) {
                                             type="number"
                                             step="0.0001"
                                             className="form-control"
-                                            placeholder="e.g. 7.15"
+                                            placeholder="e.g. 0.65"
                                             value={addForm.deposit_exchange_rate}
                                             onChange={(e) => setAddForm(prev => ({ ...prev, deposit_exchange_rate: e.target.value }))}
                                         />
@@ -1190,17 +1341,17 @@ export default function PurchaseOrders({ currentUser, isActive }) {
             {/* --- EDIT ORDER MODAL (4 TABS) --- */}
             {showEditModal && (
                 <div className="modal-backdrop" style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.5)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                    <div className="modal-content" style={{ backgroundColor: 'white', borderRadius: '8px', width: '92%', maxWidth: '960px', maxHeight: '90vh', display: 'flex', flexDirection: 'column', boxShadow: '0 10px 25px -5px rgba(0,0,0,0.2)' }}>
+                    <div className="modal-content" style={{ backgroundColor: 'white', borderRadius: '8px', width: '1200px', maxWidth: '90%', maxHeight: '90vh', display: 'flex', flexDirection: 'column', boxShadow: '0 10px 25px -5px rgba(0,0,0,0.2)', padding: '15px 8px' }}>
                         {/* Modal Header */}
-                        <div style={{ padding: '16px 24px', borderBottom: '1px solid #e2e8f0', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                            <h3 style={{ margin: 0, fontSize: '1.15rem', color: '#0f172a' }}>
-                                Edit Purchase Order #{editForm.order_id}
+                        <div style={{ padding: '16px 24px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <h3 style={{ margin: 0, fontSize: '1.5rem', color: '#0f172a', fontWeight: '400' }}>
+                                Edit Order <span style={{ fontWeight: '700' }}>{editForm.invoice_no}</span>
                             </h3>
                             <button onClick={() => setShowEditModal(false)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#64748b' }}><X size={20} /></button>
                         </div>
 
                         {/* 4 Tabs Header */}
-                        <div style={{ display: 'flex', borderBottom: '1px solid #e2e8f0', padding: '0 24px', backgroundColor: '#f8fafc' }}>
+                        <div style={{ display: 'flex', borderBottom: '1px solid #e2e8f0', padding: '0 24px' }}>
                             {[
                                 { id: 'info', label: 'Info' },
                                 { id: 'shipment', label: `Shipment (${editForm.shippingOrders.length})` },
@@ -1215,8 +1366,9 @@ export default function PurchaseOrders({ currentUser, isActive }) {
                                         border: 'none',
                                         background: 'none',
                                         cursor: 'pointer',
-                                        fontWeight: 600,
+                                        fontWeight: 500,
                                         fontSize: '0.9rem',
+                                        letterSpacing: '0.5px',
                                         color: editActiveTab === tab.id ? '#2563eb' : '#64748b',
                                         borderBottom: editActiveTab === tab.id ? '2px solid #2563eb' : '2px solid transparent'
                                     }}
@@ -1245,13 +1397,13 @@ export default function PurchaseOrders({ currentUser, isActive }) {
 
                                         {/* Shipper */}
                                         <div className="form-group" style={{ margin: 0 }}>
-                                            <label style={{ display: 'block', marginBottom: '6px', fontWeight: 500, fontSize: '0.9rem', color: '#475569' }}>Shipper</label>
+                                            <label style={{ display: 'block', marginBottom: '6px', fontWeight: 500, fontSize: '0.9rem', color: '#475569' }}>Factory</label>
                                             <select
                                                 className="form-control"
                                                 value={editForm.shipper_id}
                                                 onChange={(e) => setEditForm(prev => ({ ...prev, shipper_id: e.target.value }))}
                                             >
-                                                <option value="">-- Choose Shipper --</option>
+                                                <option value="">-- Choose Factory --</option>
                                                 {shippers.map(s => (
                                                     <option key={s.shipper_id} value={s.shipper_id}>{s.shipper_name}</option>
                                                 ))}
@@ -1308,7 +1460,7 @@ export default function PurchaseOrders({ currentUser, isActive }) {
                                                                         step="0.01"
                                                                         value={details.price}
                                                                         onChange={(e) => handleEditProductDetailChange(id, 'price', e.target.value)}
-                                                                        style={{ width: '100%', padding: '6px', border: '1px solid #cbd5e1', borderRadius: '3px', outline: 'none', textAlign: 'right' }}
+                                                                        style={{ width: '100%', padding: '6px', borderWidth: '0', borderRadius: '3px', outline: 'none', textAlign: 'right' }}
                                                                     />
                                                                 </td>
                                                                 <td style={{ padding: '4px', border: '1px solid #cbd5e1' }}>
@@ -1317,7 +1469,7 @@ export default function PurchaseOrders({ currentUser, isActive }) {
                                                                         step="0.01"
                                                                         value={details.amount}
                                                                         onChange={(e) => handleEditProductDetailChange(id, 'amount', e.target.value)}
-                                                                        style={{ width: '100%', padding: '6px', border: '1px solid #cbd5e1', borderRadius: '3px', outline: 'none', textAlign: 'right' }}
+                                                                        style={{ width: '100%', padding: '6px', borderWidth: '0', borderRadius: '3px', outline: 'none', textAlign: 'right' }}
                                                                     />
                                                                 </td>
                                                                 <td style={{ padding: '8px 10px', border: '1px solid #cbd5e1', textAlign: 'right', fontWeight: 600, color: '#334155' }}>
@@ -1381,7 +1533,6 @@ export default function PurchaseOrders({ currentUser, isActive }) {
                                                         padding: '16px',
                                                         borderRadius: '6px',
                                                         border: '1px solid #e2e8f0',
-                                                        backgroundColor: '#f8fafc',
                                                         display: 'flex',
                                                         flexDirection: 'column',
                                                         gap: '12px'
@@ -1444,10 +1595,7 @@ export default function PurchaseOrders({ currentUser, isActive }) {
 
                                                         return (
                                                             <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                                                                <div style={{ fontSize: '0.8rem', fontWeight: 600, color: '#475569' }}>
-                                                                    Assigned Containers & Products ({shipmentCobs.length})
-                                                                </div>
-                                                                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.85rem', backgroundColor: '#ffffff', border: '1px solid #e2e8f0', borderRadius: '4px', overflow: 'hidden' }}>
+                                                                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.85rem', backgroundColor: '#ffffff', border: '1px solid #e2e8f0', borderWidth: '0', overflow: 'hidden' }}>
                                                                     <thead>
                                                                         <tr style={{ background: '#f1f5f9', color: '#475569', fontSize: '0.8rem' }}>
                                                                             <th style={{ padding: '6px 10px', border: '1px solid #e2e8f0', textAlign: 'left' }}>Container No.</th>
@@ -1522,39 +1670,52 @@ export default function PurchaseOrders({ currentUser, isActive }) {
 
                                 const paidDeposit = parseFloat(editForm.deposit_amount) || 0;
                                 const paidBalanceTotal = orderBatches.reduce((sum, b) => sum + (parseFloat(b.balance) || 0), 0);
-                                const unshippedDeposit = totalPOValue > 0 ? (unshippedPOValue / totalPOValue) * paidDeposit : 0;
-                                const totalUnpaidBalance = Math.max(0, (totalPOValue - paidDeposit) - paidBalanceTotal);
+                                const totalRequiredBalance = Math.max(0, totalPOValue - paidDeposit);
+                                const totalUnpaidBalance = Math.max(0, totalRequiredBalance - paidBalanceTotal);
+
+                                // Calculate used deposit across existing shipments
+                                let totalShippedValue = 0;
+                                containerOrderBatches.forEach(cob => {
+                                    const price = parseFloat(editForm.productDetails[cob.product_id]?.price) || 0;
+                                    const amount = parseFloat(cob.amount) || 0;
+                                    totalShippedValue += amount * price;
+                                });
+
+                                let usedDeposit = 0;
+                                if (totalPOValue > 0 && paidDeposit > 0) {
+                                    usedDeposit = (totalShippedValue / totalPOValue) * paidDeposit;
+                                    if (usedDeposit > paidDeposit) {
+                                        usedDeposit = paidDeposit;
+                                    }
+                                }
 
                                 return (
                                     <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
                                         {/* 1. Overview Area (Read-only) */}
-                                        <div style={{ backgroundColor: '#ffffff', border: '1px solid #e2e8f0', borderRadius: '8px', padding: '18px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                                        <div style={{ backgroundColor: '#ffffff', paddingBottom: '18px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
                                             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                                                <div style={{ fontSize: '0.95rem', fontWeight: 600, color: '#0f172a' }}>
-                                                    Payment Overview (Read-only)
+                                                <div style={{ fontSize: '1.1rem', fontWeight: 700, textTransform: 'uppercase', color: '#0f172a' }}>
+                                                    Overview(USD)
                                                 </div>
-                                                <span style={{ fontSize: '0.75rem', fontWeight: 600, backgroundColor: '#f1f5f9', color: '#475569', padding: '3px 8px', borderRadius: '4px' }}>
-                                                    All amounts in USD ($)
-                                                </span>
                                             </div>
 
                                             {/* KPI Metric Cards */}
                                             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: '12px' }}>
                                                 <div style={{ backgroundColor: '#f8fafc', padding: '12px 14px', borderRadius: '6px', border: '1px solid #e2e8f0' }}>
-                                                    <div style={{ fontSize: '0.75rem', color: '#64748b', marginBottom: '4px' }}>PO Total Value</div>
+                                                    <div style={{ fontSize: '0.75rem', color: '#64748b', marginBottom: '4px' }}>Total Value</div>
                                                     <div style={{ fontSize: '1.15rem', fontWeight: 700, color: '#0f172a' }}>${totalPOValue.toFixed(2)}</div>
                                                 </div>
                                                 <div style={{ backgroundColor: '#eff6ff', padding: '12px 14px', borderRadius: '6px', border: '1px solid #bfdbfe' }}>
-                                                    <div style={{ fontSize: '0.75rem', color: '#1e40af', marginBottom: '4px' }}>Paid Deposit</div>
-                                                    <div style={{ fontSize: '1.15rem', fontWeight: 700, color: '#1d4ed8' }}>${paidDeposit.toFixed(2)}</div>
+                                                    <div style={{ fontSize: '0.75rem', color: '#1e40af', marginBottom: '4px' }}>Deposit</div>
+                                                    <div style={{ fontSize: '1.15rem', fontWeight: 700, color: paidDeposit > 0 ? '#1d4ed8' : '#94a3b8' }}>
+                                                        {paidDeposit > 0 ? `$${usedDeposit.toFixed(2)} / $${paidDeposit.toFixed(2)}` : 'unpaid'}
+                                                    </div>
                                                 </div>
                                                 <div style={{ backgroundColor: '#f0fdf4', padding: '12px 14px', borderRadius: '6px', border: '1px solid #bbf7d0' }}>
-                                                    <div style={{ fontSize: '0.75rem', color: '#166534', marginBottom: '4px' }}>Paid Balance Total</div>
-                                                    <div style={{ fontSize: '1.15rem', fontWeight: 700, color: '#15803d' }}>${paidBalanceTotal.toFixed(2)}</div>
-                                                </div>
-                                                <div style={{ backgroundColor: '#fefce8', padding: '12px 14px', borderRadius: '6px', border: '1px solid #fef08a' }}>
-                                                    <div style={{ fontSize: '0.75rem', color: '#854d0e', marginBottom: '4px' }}>Unshipped Goods Deposit</div>
-                                                    <div style={{ fontSize: '1.15rem', fontWeight: 700, color: '#a16207' }}>${unshippedDeposit.toFixed(2)}</div>
+                                                    <div style={{ fontSize: '0.75rem', color: '#166534', marginBottom: '4px' }}>Balance</div>
+                                                    <div style={{ fontSize: '1.15rem', fontWeight: 700, color: '#15803d' }}>
+                                                        ${paidBalanceTotal.toFixed(2)} / ${totalRequiredBalance.toFixed(2)}
+                                                    </div>
                                                 </div>
                                                 <div style={{ backgroundColor: '#fff1f2', padding: '12px 14px', borderRadius: '6px', border: '1px solid #fecdd3' }}>
                                                     <div style={{ fontSize: '0.75rem', color: '#9f1239', marginBottom: '4px' }}>Total Unpaid Balance</div>
@@ -1565,12 +1726,9 @@ export default function PurchaseOrders({ currentUser, isActive }) {
                                             {/* Products Breakdown Table */}
                                             {productSummaries.length > 0 && (
                                                 <div style={{ marginTop: '4px' }}>
-                                                    <div style={{ fontSize: '0.8rem', fontWeight: 600, color: '#475569', marginBottom: '6px' }}>
-                                                        Products & Pricing Breakdown
-                                                    </div>
                                                     <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.8rem', border: '1px solid #e2e8f0', borderRadius: '4px', overflow: 'hidden' }}>
                                                         <thead>
-                                                            <tr style={{ background: '#f8fafc', color: '#475569' }}>
+                                                            <tr style={{ color: '#475569' }}>
                                                                 <th style={{ padding: '6px 10px', textAlign: 'left', borderBottom: '1px solid #e2e8f0' }}>Product Name</th>
                                                                 <th style={{ padding: '6px 10px', textAlign: 'right', borderBottom: '1px solid #e2e8f0', width: '100px' }}>Quantity</th>
                                                                 <th style={{ padding: '6px 10px', textAlign: 'right', borderBottom: '1px solid #e2e8f0', width: '100px' }}>Unit Price</th>
@@ -1593,9 +1751,9 @@ export default function PurchaseOrders({ currentUser, isActive }) {
                                         </div>
 
                                         {/* 2. PO Level Deposit Settings */}
-                                        <div style={{ backgroundColor: '#ffffff', border: '1px solid #e2e8f0', borderRadius: '8px', padding: '18px' }}>
-                                            <div style={{ fontSize: '0.95rem', fontWeight: 600, color: '#0f172a', marginBottom: '12px' }}>
-                                                Purchase Order Deposit Settings
+                                        <div style={{ backgroundColor: '#ffffff', paddingBottom: '18px' }}>
+                                            <div style={{ fontSize: '1.1rem', fontWeight: 700, textTransform: 'uppercase', color: '#0f172a', marginBottom: '12px' }}>
+                                                Deposit
                                             </div>
                                             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
                                                 <div className="form-group" style={{ margin: 0 }}>
@@ -1619,7 +1777,7 @@ export default function PurchaseOrders({ currentUser, isActive }) {
                                                         type="number"
                                                         step="0.0001"
                                                         className="form-control"
-                                                        placeholder="e.g. 7.15"
+                                                        placeholder="e.g. 0.65"
                                                         value={editForm.deposit_exchange_rate}
                                                         onChange={(e) => setEditForm(prev => ({ ...prev, deposit_exchange_rate: e.target.value }))}
                                                     />
@@ -1628,35 +1786,10 @@ export default function PurchaseOrders({ currentUser, isActive }) {
                                         </div>
 
                                         {/* 3. Backorder Batches Payment Section */}
-                                        <div style={{ backgroundColor: '#ffffff', border: '1px solid #e2e8f0', borderRadius: '8px', padding: '18px', display: 'flex', flexDirection: 'column', gap: '14px' }}>
+                                        <div style={{ backgroundColor: '#ffffff', display: 'flex', flexDirection: 'column', gap: '14px' }}>
                                             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '10px' }}>
-                                                <div style={{ fontSize: '0.95rem', fontWeight: 600, color: '#0f172a' }}>
-                                                    Backorder Batches Payment & Balance ({orderBatches.length})
-                                                </div>
-
-                                                {/* Associate Unassigned Batch Inline */}
-                                                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                                                    <select
-                                                        value={selectedUnassignedBatchId}
-                                                        onChange={(e) => setSelectedUnassignedBatchId(e.target.value)}
-                                                        style={{ padding: '5px 10px', fontSize: '0.85rem', border: '1px solid #cbd5e1', borderRadius: '4px', maxWidth: '320px', backgroundColor: 'white' }}
-                                                    >
-                                                        <option value="">-- Link Unassigned Batch --</option>
-                                                        {unassignedBatches.map(b => (
-                                                            <option key={b.order_batch_id} value={b.order_batch_id}>
-                                                                {b.sku} - {b.product_name || b.description || 'No desc'} ({b.amount != null ? b.amount : 0} SQM)
-                                                            </option>
-                                                        ))}
-                                                    </select>
-                                                    <button
-                                                        type="button"
-                                                        className="btn-upload white-bg"
-                                                        onClick={handleLinkUnassignedBatch}
-                                                        disabled={!selectedUnassignedBatchId}
-                                                        style={{ display: 'flex', alignItems: 'center', gap: '4px', padding: '5px 10px', fontSize: '0.85rem', cursor: selectedUnassignedBatchId ? 'pointer' : 'not-allowed', opacity: selectedUnassignedBatchId ? 1 : 0.6 }}
-                                                    >
-                                                        <Plus size={14} /> Link Batch
-                                                    </button>
+                                                <div style={{ fontSize: '1.1rem', fontWeight: 700, textTransform: 'uppercase', color: '#0f172a' }}>
+                                                    Balance ({orderBatches.length})
                                                 </div>
                                             </div>
 
@@ -1737,7 +1870,7 @@ export default function PurchaseOrders({ currentUser, isActive }) {
                                                                                 step="0.0001"
                                                                                 style={{ width: '100%', padding: '5px 8px', border: '1px solid #cbd5e1', borderRadius: '3px', textAlign: 'right', fontSize: '0.85rem' }}
                                                                                 value={b.balance_exchange_rate ?? ''}
-                                                                                placeholder="e.g. 7.15"
+                                                                                placeholder="e.g. 0.65"
                                                                                 onChange={(e) => handleBatchFieldChange(b.order_batch_id, 'balance_exchange_rate', e.target.value)}
                                                                             />
                                                                         </td>
@@ -1766,6 +1899,31 @@ export default function PurchaseOrders({ currentUser, isActive }) {
                                                     </table>
                                                 </div>
                                             )}
+
+                                            {/* Associate Unassigned Batch Inline */}
+                                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                                <select
+                                                    value={selectedUnassignedBatchId}
+                                                    onChange={(e) => setSelectedUnassignedBatchId(e.target.value)}
+                                                    style={{ padding: '5px 10px', fontSize: '0.85rem', border: '1px solid #cbd5e1', borderRadius: '4px', maxWidth: '320px', backgroundColor: 'white' }}
+                                                >
+                                                    <option value="">-- Link Unassigned Batch --</option>
+                                                    {unassignedBatches.map(b => (
+                                                        <option key={b.order_batch_id} value={b.order_batch_id}>
+                                                            {b.sku} - {b.product_name || b.description || 'No desc'} ({b.amount != null ? b.amount : 0} SQM)
+                                                        </option>
+                                                    ))}
+                                                </select>
+                                                <button
+                                                    type="button"
+                                                    className="btn-upload white-bg"
+                                                    onClick={handleLinkUnassignedBatch}
+                                                    disabled={!selectedUnassignedBatchId}
+                                                    style={{ display: 'flex', alignItems: 'center', gap: '4px', padding: '5px 10px', fontSize: '0.85rem', cursor: selectedUnassignedBatchId ? 'pointer' : 'not-allowed', opacity: selectedUnassignedBatchId ? 1 : 0.6 }}
+                                                >
+                                                    <Plus size={14} /> Link Batch
+                                                </button>
+                                            </div>
                                         </div>
                                     </div>
                                 );
@@ -1887,7 +2045,7 @@ export default function PurchaseOrders({ currentUser, isActive }) {
                         <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
                             {[
                                 { id: 'status', label: 'Status' },
-                                { id: 'shipper', label: 'Shipper' },
+                                { id: 'shipper', label: 'Factory' },
                                 { id: 'invoice_no', label: 'Invoice No.' },
                                 { id: 'payment', label: 'Payment' },
                                 { id: 'products', label: 'Products' },
