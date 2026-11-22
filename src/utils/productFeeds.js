@@ -14,16 +14,22 @@ export const fetchShopifyVariants = async (domain, accessToken) => {
     while (url && pageCount < maxPages) {
         pageCount++;
         try {
-            const res = await tauriFetch(url, {
-                method: 'GET',
-                headers: {
-                    'X-Shopify-Access-Token': accessToken.trim(),
-                    'Content-Type': 'application/json'
-                }
-            });
+            let res = null;
+            for (let attempt = 0; attempt < 3; attempt++) {
+                res = await tauriFetch(url, {
+                    method: 'GET',
+                    headers: {
+                        'X-Shopify-Access-Token': accessToken.trim(),
+                        'Content-Type': 'application/json'
+                    }
+                });
+                if (res.status !== 429) break;
+                const retryAfter = parseFloat(res.headers?.get?.('retry-after') || '1');
+                await new Promise(r => setTimeout(r, Math.max(500, (isNaN(retryAfter) ? 1 : retryAfter) * 1000)));
+            }
 
-            if (!res.ok) {
-                console.error("HTTP error fetching Shopify products:", res.status, url);
+            if (!res || !res.ok) {
+                console.error("HTTP error fetching Shopify products:", res?.status, url);
                 break;
             }
 
@@ -44,7 +50,8 @@ export const fetchShopifyVariants = async (domain, accessToken) => {
                         inventory_item_id: String(v.inventory_item_id || ''),
                         name: fullName,
                         sku: v.sku || '',
-                        price: v.price || ''
+                        price: v.price || '',
+                        source: 'shopify'
                     });
                 }
             }
@@ -74,9 +81,8 @@ export const fetchShopifyVariants = async (domain, accessToken) => {
 export const fetchProductFeeds = async () => {
     try {
         const store = await load('settings.json', { autoSave: false });
-        const chtShopifyDomain = await store.get('cht_shopify_domain');
-        const chtShopifyAccessToken = await store.get('cht_shopify_access_token');
-        const chtUrl = await store.get('cht_feed');
+        const chtShopifyDomain = (await store.get('cht_shopify_domain') || '').trim();
+        const chtShopifyAccessToken = (await store.get('cht_shopify_access_token') || '').trim();
         const gtoUrl = await store.get('gto_feed');
         const stUrl = await store.get('st_feed');
 
@@ -130,13 +136,7 @@ export const fetchProductFeeds = async () => {
 
         const fetchCht = async () => {
             if (chtShopifyDomain && chtShopifyAccessToken) {
-                const variants = await fetchShopifyVariants(chtShopifyDomain, chtShopifyAccessToken);
-                if (variants && variants.length > 0) {
-                    return variants;
-                }
-            }
-            if (chtUrl) {
-                return await fetchFeed(chtUrl);
+                return await fetchShopifyVariants(chtShopifyDomain, chtShopifyAccessToken);
             }
             return [];
         };
@@ -158,3 +158,85 @@ export const fetchProductFeeds = async () => {
 if (typeof window !== 'undefined') {
     window.fetchProductFeeds = fetchProductFeeds;
 }
+
+export const buildStPriceUpdateItem = (product) => ({
+    product_id: String(product.st_id),
+    product_code: (product.showtile_product_code || '').toString().trim(),
+    finish: (product.finish || '').toString(),
+    size: (product.size || '').toString(),
+    price: product.showtile_price !== null && product.showtile_price !== undefined && product.showtile_price !== ''
+        ? product.showtile_price.toString()
+        : '',
+    suffix: (product.suffix || '').toString()
+});
+
+export const updateStPricesOnline = async (updates, { batchSize = 50 } = {}) => {
+    if (!Array.isArray(updates) || updates.length === 0) {
+        return { total: 0, successCount: 0, failCount: 0, results: [], errors: [] };
+    }
+
+    const store = await load('settings.json', { autoSave: false });
+    const stEndpoint = await store.get('st_endpoint');
+    const stKey = await store.get('st_key');
+
+    if (!stEndpoint || !stKey) {
+        throw new Error("Please configure ST Endpoint and Key in Settings first.");
+    }
+
+    let successCount = 0;
+    let failCount = 0;
+    const allResults = [];
+    const errors = [];
+
+    for (let i = 0; i < updates.length; i += batchSize) {
+        const chunk = updates.slice(i, i + batchSize);
+        try {
+            const res = await tauriFetch(stEndpoint, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'x-api-key': stKey
+                },
+                body: JSON.stringify({ updates: chunk })
+            });
+
+            if (res.ok) {
+                const data = await res.json();
+                const chunkResults = Array.isArray(data?.results) ? data.results : [];
+                allResults.push(...chunkResults);
+
+                if (chunkResults.length > 0) {
+                    for (const r of chunkResults) {
+                        if (r && r.status === 'success') {
+                            successCount++;
+                        } else {
+                            failCount++;
+                            if (r?.message) errors.push(r.message);
+                        }
+                    }
+                    if (chunkResults.length < chunk.length) {
+                        failCount += chunk.length - chunkResults.length;
+                    }
+                } else {
+                    failCount += chunk.length;
+                    errors.push(data?.message || 'Empty response results from server.');
+                }
+            } else {
+                failCount += chunk.length;
+                errors.push(`HTTP status: ${res.status}`);
+            }
+        } catch (err) {
+            failCount += chunk.length;
+            errors.push(err?.message || 'Error connecting to online API.');
+        }
+    }
+
+    return {
+        total: updates.length,
+        successCount,
+        failCount,
+        results: allResults,
+        errors
+    };
+};
+

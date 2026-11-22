@@ -9,6 +9,7 @@ import { readDir, copyFile, exists, mkdir } from '@tauri-apps/plugin-fs';
 import { load } from '@tauri-apps/plugin-store';
 import { fetch as tauriFetch } from '@tauri-apps/plugin-http';
 import { getSyncConfig, saveSyncConfig, getQueueStats, triggerFullSync, testWorkerConnection, forceResetDatabase } from '../utils/syncService';
+import { fetchProductFeeds } from '../utils/productFeeds';
 
 export default function Settings({ currentUser, isActive }) {
     const [attributes, setAttributes] = useState([]);
@@ -342,6 +343,7 @@ export default function Settings({ currentUser, isActive }) {
             await store.set('gto_feed', gtoFeed);
 
             await store.save();
+            fetchProductFeeds().catch(err => console.warn("Background feed refresh after saving settings failed:", err));
             alert("Website API settings saved successfully.");
         } catch (e) {
             console.error("Failed to save Website settings:", e);

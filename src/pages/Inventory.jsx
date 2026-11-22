@@ -1,12 +1,83 @@
 import { useState, useEffect, useRef } from 'react';
 import Papa from 'papaparse';
-import { Upload, Search, Trash2, Edit3, X, Save } from 'lucide-react';
+import { Upload, Download, Search, Trash2, Edit3, X, Save, RefreshCw } from 'lucide-react';
+import { save, confirm } from '@tauri-apps/plugin-dialog';
+import { writeTextFile } from '@tauri-apps/plugin-fs';
 import { getDb } from '../db/Database';
 import { getLocalTodayStrSync } from '../utils/timezone';
 import { normalizeSize, findBestMatch, extractFeatures } from '../utils/featureExtractor';
 import './Inventory.css';
 
 export { normalizeSize, findBestMatch, extractFeatures };
+
+const parseCsvNumber = (val) => {
+    if (!val) return 0;
+    const num = parseFloat(String(val).replace(/,/g, '').trim());
+    return isNaN(num) ? 0 : num;
+};
+
+const parseInventoryCsvRow = (row) => {
+    const sku = String(row['SKU'] || '').trim();
+    const stock_no = String(row['Stock No.'] || '');
+    const sales_desc = String(row['Sales Description'] || '');
+    const supplier = String(row['Supplier'] || '');
+    const available = parseCsvNumber(row['Available Qty'] || row['Available']);
+    const holding = parseCsvNumber(row['Holding']);
+    const so_qty = parseCsvNumber(row['SO Qty']);
+    const total_qty = parseCsvNumber(row['Total Qty']);
+    const rrp = parseCsvNumber(row['RRP']);
+    const cost = parseCsvNumber(row['Cost']);
+    const online_name = String(row['Online(the name using on online sale)'] || row['Online'] || '');
+    const showtile = String(row['Showtile(The name use in store sale)'] || row['Showtile'] || '');
+    const pallet_qty = parseCsvNumber(row['Pallet Qty']);
+    const box_qty = parseCsvNumber(row['Box Qty']);
+    const piece_qty = parseCsvNumber(row['Piece Qty']);
+    const m2_per_box = parseCsvNumber(row['m2/Box']);
+    const pcs_per_box = parseCsvNumber(row['pcs/Box']);
+    const box_per_pallet = parseCsvNumber(row['box/Pallet']);
+    const stk = String(row['STK'] || '');
+
+    let days = '';
+    if (row['Days'] !== undefined && row['Days'] !== '') {
+        const daysNum = parseFloat(String(row['Days']).replace(/,/g, '').trim());
+        if (!isNaN(daysNum)) {
+            const d = new Date();
+            d.setDate(d.getDate() - daysNum);
+            const year = d.getFullYear();
+            const month = String(d.getMonth() + 1).padStart(2, '0');
+            const day = String(d.getDate()).padStart(2, '0');
+            days = `${year}-${month}-${day}`;
+        }
+    }
+
+    const x_inactive = String(row['X/Inactive'] || '');
+    const batch = String(row['Batch'] || '');
+    const location = String(row['Location'] || '');
+
+    return {
+        sku, stock_no, sales_desc, supplier, available, holding, so_qty, total_qty,
+        rrp, cost, online_name, showtile, pallet_qty, box_qty, piece_qty,
+        m2_per_box, pcs_per_box, box_per_pallet, stk, days, x_inactive, batch, location
+    };
+};
+
+const syncBackorderItems = async (db, backorderItemsToSync) => {
+    for (const b of backorderItemsToSync) {
+        try {
+            await db.execute(`
+                INSERT INTO order_batch (product_id, sku, description, amount, created_date)
+                VALUES ($1, $2, $3, $4, $5)
+                ON CONFLICT(sku) DO UPDATE SET
+                    product_id = COALESCE(excluded.product_id, order_batch.product_id),
+                    description = excluded.description,
+                    amount = excluded.amount,
+                    created_date = excluded.created_date
+            `, [b.product_id, b.sku, b.description, b.amount, b.created_date]);
+        } catch (obErr) {
+            console.warn("Failed to sync order_batch row:", obErr);
+        }
+    }
+};
 
 export default function Inventory({ currentUser }) {
     const [data, setData] = useState([]);
@@ -17,6 +88,8 @@ export default function Inventory({ currentUser }) {
     const [sortConfig, setSortConfig] = useState({ key: null, direction: 'asc' });
     const [editModal, setEditModal] = useState({ show: false, item: null, field: '', val: '', options: [] });
     const fileInputRef = useRef(null);
+    const matchingFileInputRef = useRef(null);
+    const recoverFileInputRef = useRef(null);
 
     const canWrite = currentUser?.permissions?.inventory?.write;
 
@@ -114,62 +187,24 @@ export default function Inventory({ currentUser }) {
             const finishes = attributes.filter(a => a.type === 'finish').map(a => a.value.trim());
 
             try {
-                const parseNumber = (val) => {
-                    if (!val) return 0;
-                    const num = parseFloat(String(val).replace(/,/g, '').trim());
-                    return isNaN(num) ? 0 : num;
-                };
-
                 // Phase 1: Local comparison & filtering (0 remote Turso row reads)
                 const itemsToUpsert = [];
                 const backorderItemsToSync = [];
                 const todayStr = getLocalTodayStrSync();
 
                 for (const row of parsedData) {
-                    if (!row['SKU'] || row['SKU'].trim() === '') continue; // skip invalid rows
+                    if (!row['SKU'] || String(row['SKU']).trim() === '') continue; // skip invalid rows
 
-                    const salesDesc = String(row['Sales Description'] || '');
-
+                    const parsed = parseInventoryCsvRow(row);
                     const {
                         extractedName, extractedColour, extractedFinish, extractedSize, backorder, backorder_amount
-                    } = extractFeatures(salesDesc, colours, finishes);
+                    } = extractFeatures(parsed.sales_desc, colours, finishes);
 
-                    const sku = String(row['SKU']).trim();
-                    const stock_no = String(row['Stock No.'] || '');
-                    const sales_desc = String(row['Sales Description'] || '');
-                    const supplier = String(row['Supplier'] || '');
-                    const available = parseNumber(row['Available Qty'] || row['Available']);
-                    const holding = parseNumber(row['Holding']);
-                    const so_qty = parseNumber(row['SO Qty']);
-                    const total_qty = parseNumber(row['Total Qty']);
-                    const rrp = parseNumber(row['RRP']);
-                    const cost = parseNumber(row['Cost']);
-                    const online_name = String(row['Online(the name using on online sale)'] || row['Online'] || '');
-                    const showtile = String(row['Showtile(The name use in store sale)'] || row['Showtile'] || '');
-                    const pallet_qty = parseNumber(row['Pallet Qty']);
-                    const box_qty = parseNumber(row['Box Qty']);
-                    const piece_qty = parseNumber(row['Piece Qty']);
-                    const m2_per_box = parseNumber(row['m2/Box']);
-                    const pcs_per_box = parseNumber(row['pcs/Box']);
-                    const box_per_pallet = parseNumber(row['box/Pallet']);
-                    const stk = String(row['STK'] || '');
-
-                    let days = '';
-                    if (row['Days'] !== undefined && row['Days'] !== '') {
-                        const daysNum = parseFloat(String(row['Days']).replace(/,/g, '').trim());
-                        if (!isNaN(daysNum)) {
-                            const d = new Date();
-                            d.setDate(d.getDate() - daysNum);
-                            const year = d.getFullYear();
-                            const month = String(d.getMonth() + 1).padStart(2, '0');
-                            const day = String(d.getDate()).padStart(2, '0');
-                            days = `${year}-${month}-${day}`;
-                        }
-                    }
-
-                    const x_inactive = String(row['X/Inactive'] || '');
-                    const batch = String(row['Batch'] || '');
-                    const location = String(row['Location'] || '');
+                    const {
+                        sku, stock_no, sales_desc, supplier, available, holding, so_qty, total_qty, rrp, cost,
+                        online_name, showtile, pallet_qty, box_qty, piece_qty, m2_per_box, pcs_per_box,
+                        box_per_pallet, stk, days, x_inactive, batch, location
+                    } = parsed;
 
                     const existing = inventoryMap.get(sku);
                     let shouldUpdate = false;
@@ -265,21 +300,7 @@ export default function Inventory({ currentUser }) {
                 }
                 // Phase 3: Sync backorder items to order_batch
                 if (backorderItemsToSync.length > 0) {
-                    for (const b of backorderItemsToSync) {
-                        try {
-                            await db.execute(`
-                                INSERT INTO order_batch (product_id, sku, description, amount, created_date)
-                                VALUES ($1, $2, $3, $4, $5)
-                                ON CONFLICT(sku) DO UPDATE SET
-                                    product_id = COALESCE(excluded.product_id, order_batch.product_id),
-                                    description = excluded.description,
-                                    amount = excluded.amount,
-                                    created_date = excluded.created_date
-                            `, [b.product_id, b.sku, b.description, b.amount, b.created_date]);
-                        } catch (obErr) {
-                            console.warn("Failed to sync order_batch row:", obErr);
-                        }
-                    }
+                    await syncBackorderItems(db, backorderItemsToSync);
                 }
             } catch (innerErr) {
                 console.error("Data processing failed", innerErr);
@@ -320,8 +341,323 @@ export default function Inventory({ currentUser }) {
         Papa.parse(file, {
             header: true,
             skipEmptyLines: true,
+            transformHeader: h => h.trim(),
             complete: (results) => {
+                const fields = results.meta?.fields || [];
+                if (!fields.includes('SKU') || !fields.includes('Sales Description')) {
+                    alert("Invalid Inventory CSV format: missing 'SKU' or 'Sales Description' column. If you are importing matching parameters, please use 'Import Matching Data'.");
+                    if (fileInputRef.current) fileInputRef.current.value = '';
+                    return;
+                }
                 processData(results.data);
+            }
+        });
+    };
+
+    const handleRecoverCleanCsv = (e) => {
+        if (!canWrite) return;
+        const file = e.target.files?.[0];
+        if (!file) return;
+
+        Papa.parse(file, {
+            header: true,
+            skipEmptyLines: true,
+            transformHeader: h => h.trim(),
+            complete: async (results) => {
+                const resetInput = () => {
+                    if (recoverFileInputRef.current) recoverFileInputRef.current.value = '';
+                };
+
+                const fields = results.meta?.fields || [];
+                if (!fields.includes('SKU') || !fields.includes('Sales Description')) {
+                    alert("Invalid CSV format: missing required 'SKU' or 'Sales Description' column. Please select a standard Inventory export CSV.");
+                    resetInput();
+                    return;
+                }
+
+                if (!results.data || results.data.length === 0) {
+                    alert("No data found in the CSV file.");
+                    resetInput();
+                    return;
+                }
+
+                setLoading(true);
+                try {
+                    const db = await getDb();
+                    const emptyDescRows = await db.select(
+                        "SELECT product_id, sku, product_parent_id, days FROM inventory WHERE sales_description IS NULL OR TRIM(sales_description) = ''"
+                    );
+
+                    if (!emptyDescRows || emptyDescRows.length === 0) {
+                        alert("No inventory records with empty sales_description were found.");
+                        return;
+                    }
+
+                    const csvRowMap = new Map();
+                    for (const row of results.data) {
+                        const rawSku = String(row['SKU'] || '').trim();
+                        if (rawSku) {
+                            csvRowMap.set(rawSku.toLowerCase(), row);
+                        }
+                    }
+
+                    const toUpdate = [];
+                    const toDelete = [];
+                    for (const dbRow of emptyDescRows) {
+                        const dbSku = String(dbRow.sku || '').trim().toLowerCase();
+                        const matchedCsvRow = dbSku ? csvRowMap.get(dbSku) : undefined;
+                        if (matchedCsvRow) {
+                            toUpdate.push({ dbRow, csvRow: matchedCsvRow });
+                        } else {
+                            toDelete.push(dbRow);
+                        }
+                    }
+
+                    const confirmed = await confirm(
+                        `Found ${emptyDescRows.length} inventory record(s) with empty description:\n` +
+                        `• ${toUpdate.length} matched by SKU in CSV (will restore/update columns while keeping existing extracted parameters)\n` +
+                        `• ${toDelete.length} not found in CSV (will be PERMANENTLY DELETED as obsolete)\n\n` +
+                        `Do you want to proceed?`
+                    );
+                    if (!confirmed) return;
+
+                    const attrs = await db.select('SELECT type, value FROM attributes');
+                    const colours = attrs.filter(a => a.type === 'colour').map(a => a.value.trim());
+                    const finishes = attrs.filter(a => a.type === 'finish').map(a => a.value.trim());
+                    const todayStr = getLocalTodayStrSync();
+                    const backorderItemsToSync = [];
+
+                    let updatedCount = 0;
+                    for (const { dbRow, csvRow } of toUpdate) {
+                        const parsed = parseInventoryCsvRow(csvRow);
+                        const { backorder, backorder_amount } = extractFeatures(parsed.sales_desc, colours, finishes);
+                        const finalDays = parsed.days !== '' ? parsed.days : (dbRow.days || '');
+
+                        await db.execute(
+                            `UPDATE inventory SET
+                                stock_no = $1,
+                                sales_description = $2,
+                                supplier = $3,
+                                available = $4,
+                                holding = $5,
+                                so_qty = $6,
+                                total_qty = $7,
+                                rrp = $8,
+                                cost = $9,
+                                online_name = $10,
+                                showtile_name = $11,
+                                pallet_qty = $12,
+                                box_qty = $13,
+                                piece_qty = $14,
+                                m2_per_box = $15,
+                                pcs_per_box = $16,
+                                box_per_pallet = $17,
+                                stk = $18,
+                                days = $19,
+                                x_inactive = $20,
+                                batch = $21,
+                                location = $22,
+                                backorder = $23,
+                                backorder_amount = $24
+                            WHERE product_id = $25`,
+                            [
+                                parsed.stock_no, parsed.sales_desc, parsed.supplier,
+                                parsed.available, parsed.holding, parsed.so_qty, parsed.total_qty,
+                                parsed.rrp, parsed.cost, parsed.online_name, parsed.showtile,
+                                parsed.pallet_qty, parsed.box_qty, parsed.piece_qty,
+                                parsed.m2_per_box, parsed.pcs_per_box, parsed.box_per_pallet,
+                                parsed.stk, finalDays, parsed.x_inactive, parsed.batch, parsed.location,
+                                backorder, backorder_amount, dbRow.product_id
+                            ]
+                        );
+                        updatedCount++;
+
+                        if (backorder === 1) {
+                            backorderItemsToSync.push({
+                                sku: dbRow.sku,
+                                description: parsed.sales_desc,
+                                amount: backorder_amount,
+                                product_id: dbRow.product_parent_id || null,
+                                created_date: todayStr
+                            });
+                        }
+                    }
+
+                    let deletedCount = 0;
+                    if (toDelete.length > 0) {
+                        const deleteBatchSize = 200;
+                        for (let i = 0; i < toDelete.length; i += deleteBatchSize) {
+                            const chunkIds = toDelete.slice(i, i + deleteBatchSize).map(r => r.product_id);
+                            const placeholders = chunkIds.map((_, idx) => `$${idx + 1}`).join(', ');
+                            await db.execute(`DELETE FROM inventory WHERE product_id IN (${placeholders})`, chunkIds);
+                            deletedCount += chunkIds.length;
+                        }
+                    }
+
+                    if (backorderItemsToSync.length > 0) {
+                        await syncBackorderItems(db, backorderItemsToSync);
+                    }
+
+                    if (db.sync) {
+                        await db.sync();
+                    }
+                    await loadData(false);
+                    alert(`Recovery & cleanup complete!\nRestored/Updated: ${updatedCount} record(s)\nDeleted obsolete: ${deletedCount} record(s)`);
+                } catch (err) {
+                    console.error("Failed to recover/clean inventory CSV:", err);
+                    alert("Error processing recovery/cleanup CSV.");
+                } finally {
+                    setLoading(false);
+                    resetInput();
+                }
+            }
+        });
+    };
+
+    const handleExportMatchingData = async () => {
+        try {
+            setLoading(true);
+            const db = await getDb();
+            const rows = await db.select(
+                'SELECT product_id, sku, sales_description, extracted_name, extracted_colour, extracted_finish, extracted_size FROM inventory ORDER BY product_id ASC'
+            );
+
+            if (!rows || rows.length === 0) {
+                alert("No inventory records to export.");
+                return;
+            }
+
+            const exportData = rows.map(r => ({
+                'ID': r.product_id,
+                'SKU': r.sku || '',
+                'Description': r.sales_description || '',
+                'Extracted Name': r.extracted_name || '',
+                'Colour': r.extracted_colour || '',
+                'Finish': r.extracted_finish || '',
+                'Size': r.extracted_size || ''
+            }));
+
+            const csvContent = Papa.unparse(exportData);
+
+            let saved = false;
+            try {
+                const filePath = await save({
+                    filters: [{ name: 'CSV File', extensions: ['csv'] }],
+                    defaultPath: 'inventory_matching_data.csv'
+                });
+                if (filePath) {
+                    await writeTextFile(filePath, csvContent);
+                    saved = true;
+                    alert(`Exported ${exportData.length} matching data record(s) successfully!`);
+                }
+            } catch (dialogErr) {
+                console.warn("Tauri save dialog not available, using browser download:", dialogErr);
+            }
+
+            if (!saved) {
+                const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = 'inventory_matching_data.csv';
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+                alert(`Exported ${exportData.length} matching data record(s) successfully!`);
+            }
+        } catch (e) {
+            console.error("Failed to export matching data:", e);
+            alert("Failed to export matching data.");
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    const handleImportMatchingData = (e) => {
+        if (!canWrite) return;
+        const file = e.target.files?.[0];
+        if (!file) return;
+
+        Papa.parse(file, {
+            header: true,
+            skipEmptyLines: true,
+            complete: async (results) => {
+                if (!results.data || results.data.length === 0) {
+                    alert("No data found in the CSV file.");
+                    if (matchingFileInputRef.current) matchingFileInputRef.current.value = '';
+                    return;
+                }
+
+                setLoading(true);
+                try {
+                    const db = await getDb();
+                    let updatedCount = 0;
+
+                    const getVal = (row, candidates) => {
+                        for (const k of Object.keys(row)) {
+                            const cleanK = k.trim().toLowerCase();
+                            for (const c of candidates) {
+                                if (cleanK === c.toLowerCase()) return row[k];
+                            }
+                        }
+                        return undefined;
+                    };
+
+                    for (const row of results.data) {
+                        const id = getVal(row, ['ID', 'product_id', 'id']);
+                        const sku = getVal(row, ['SKU', 'sku']);
+                        const eName = getVal(row, ['Extracted Name', 'extracted_name', 'name']);
+                        const eColour = getVal(row, ['Colour', 'Color', 'extracted_colour', 'extracted_color', 'colour', 'color']);
+                        const eFinish = getVal(row, ['Finish', 'extracted_finish', 'finish']);
+                        const eSize = getVal(row, ['Size', 'extracted_size', 'size']);
+
+                        const normSize = (eSize !== undefined && eSize !== null && String(eSize).trim() !== '')
+                            ? normalizeSize(String(eSize).trim())
+                            : (eSize !== undefined ? '' : undefined);
+
+                        const nameVal = eName !== undefined ? String(eName).trim() : null;
+                        const colourVal = eColour !== undefined ? String(eColour).trim() : null;
+                        const finishVal = eFinish !== undefined ? String(eFinish).trim() : null;
+                        const sizeVal = normSize !== undefined ? normSize : null;
+
+                        if (id) {
+                            await db.execute(
+                                `UPDATE inventory SET 
+                                    extracted_name = $1, 
+                                    extracted_colour = $2, 
+                                    extracted_finish = $3, 
+                                    extracted_size = $4 
+                                 WHERE product_id = $5`,
+                                [nameVal, colourVal, finishVal, sizeVal, id]
+                            );
+                            updatedCount++;
+                        } else if (sku && String(sku).trim() !== '') {
+                            await db.execute(
+                                `UPDATE inventory SET 
+                                    extracted_name = $1, 
+                                    extracted_colour = $2, 
+                                    extracted_finish = $3, 
+                                    extracted_size = $4 
+                                 WHERE sku = $5`,
+                                [nameVal, colourVal, finishVal, sizeVal, String(sku).trim()]
+                            );
+                            updatedCount++;
+                        }
+                    }
+
+                    if (db.sync) {
+                        await db.sync();
+                    }
+                    await loadData(false);
+                    alert(`Successfully imported matching data! Updated ${updatedCount} inventory record(s).`);
+                } catch (err) {
+                    console.error("Failed to import matching data:", err);
+                    alert("Error importing matching data.");
+                } finally {
+                    setLoading(false);
+                    if (matchingFileInputRef.current) matchingFileInputRef.current.value = '';
+                }
             }
         });
     };
@@ -393,7 +729,46 @@ export default function Inventory({ currentUser }) {
                     Total Records: {filteredData.length}
                 </div>
 
-                <div style={{ display: 'flex', gap: '12px' }}>
+                <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap' }}>
+                    <button
+                        className="btn-upload"
+                        onClick={handleExportMatchingData}
+                        disabled={loading}
+                        style={{
+                            background: 'white',
+                            color: '#334155',
+                            border: '1px solid #cbd5e1',
+                            cursor: 'pointer'
+                        }}
+                        title="Export matching parameters (ID, SKU, Description, Extracted parameters) to CSV"
+                    >
+                        <Download size={16} />
+                        Export Matching Data
+                    </button>
+                    <input
+                        type="file"
+                        accept=".csv"
+                        ref={matchingFileInputRef}
+                        onChange={handleImportMatchingData}
+                        style={{ display: 'none' }}
+                        disabled={!canWrite}
+                    />
+                    <button
+                        className="btn-upload"
+                        onClick={() => matchingFileInputRef.current?.click()}
+                        disabled={loading || !canWrite}
+                        style={{
+                            background: 'white',
+                            color: canWrite ? '#334155' : '#94a3b8',
+                            border: '1px solid #cbd5e1',
+                            cursor: canWrite ? 'pointer' : 'not-allowed',
+                            opacity: canWrite ? 1 : 0.6
+                        }}
+                        title={!canWrite ? 'You do not have permission to import' : 'Import matching parameters from CSV'}
+                    >
+                        <Upload size={16} />
+                        Import Matching Data
+                    </button>
                     <button
                         className="btn-upload"
                         onClick={handleClearAll}
@@ -420,6 +795,30 @@ export default function Inventory({ currentUser }) {
                         }}
                     >
                         {loading ? 'Processing...' : 'Auto Analysis'}
+                    </button>
+                    <input
+                        type="file"
+                        accept=".csv"
+                        ref={recoverFileInputRef}
+                        onChange={handleRecoverCleanCsv}
+                        style={{ display: 'none' }}
+                        disabled={!canWrite}
+                    />
+                    <button
+                        className="btn-upload"
+                        onClick={() => recoverFileInputRef.current?.click()}
+                        disabled={loading || !canWrite}
+                        style={{
+                            background: 'white',
+                            color: canWrite ? '#b45309' : '#94a3b8',
+                            border: '1px solid #f59e0b',
+                            cursor: canWrite ? 'pointer' : 'not-allowed',
+                            opacity: canWrite ? 1 : 0.6
+                        }}
+                        title={!canWrite ? 'You do not have permission to import' : 'Restore empty-description records from Inventory CSV and delete unmatched obsolete SKUs'}
+                    >
+                        <RefreshCw size={16} />
+                        Recover / Clean CSV
                     </button>
                     <input
                         type="file"

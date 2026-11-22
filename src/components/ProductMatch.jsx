@@ -1,5 +1,5 @@
 import React from 'react';
-import { Edit3, X, Save, Search } from 'lucide-react';
+import { Edit3, X, Save, Search, ArrowUpDown, ArrowUp, ArrowDown } from 'lucide-react';
 import { getDb } from '../db/Database';
 import { getLocalTodayStrSync } from '../utils/timezone';
 import { extractFeatures } from '../utils/featureExtractor';
@@ -14,6 +14,7 @@ function ProductMatch() {
     const [search, setSearch] = React.useState('');
     const [drafts, setDrafts] = React.useState({});
     const [editModal, setEditModal] = React.useState({ show: false, item: null, field: '', val: '', options: [] });
+    const [sortConfig, setSortConfig] = React.useState({ key: 'product_id', direction: 'desc' });
 
     const loadRecords = async () => {
         setLoading(true);
@@ -160,6 +161,44 @@ function ProductMatch() {
         }
     };
 
+    const handleSort = (key) => {
+        setSortConfig(prev => {
+            if (prev.key === key) {
+                return { key, direction: prev.direction === 'asc' ? 'desc' : 'asc' };
+            }
+            return { key, direction: 'asc' };
+        });
+    };
+
+    const getSortValue = (r, key) => {
+        const draft = drafts[r.product_id] || {};
+        if (key === 'matched_product_name') {
+            return draft.matched_product_name !== undefined ? draft.matched_product_name : '';
+        }
+        if (draft[key] !== undefined) return draft[key];
+        return r[key] || '';
+    };
+
+    const renderSortHeader = (label, key, width = 'auto') => {
+        const isSorted = sortConfig.key === key;
+        return (
+            <th
+                style={{ width, cursor: 'pointer', userSelect: 'none' }}
+                onClick={() => handleSort(key)}
+                title={`Sort by ${label}`}
+            >
+                <div style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+                    <span>{label}</span>
+                    {isSorted ? (
+                        sortConfig.direction === 'asc' ? <ArrowUp size={13} color="#2563eb" /> : <ArrowDown size={13} color="#2563eb" />
+                    ) : (
+                        <ArrowUpDown size={13} color="#94a3b8" />
+                    )}
+                </div>
+            </th>
+        );
+    };
+
     const term = search.trim().toLowerCase();
     const filteredRecords = term
         ? records.filter(r => {
@@ -172,6 +211,14 @@ function ProductMatch() {
             );
         })
         : records;
+
+    const sortedRecords = [...filteredRecords].sort((a, b) => {
+        if (!sortConfig.key) return 0;
+        const valA = String(getSortValue(a, sortConfig.key)).trim().toLowerCase();
+        const valB = String(getSortValue(b, sortConfig.key)).trim().toLowerCase();
+        const cmp = valA.localeCompare(valB, undefined, { numeric: true, sensitivity: 'base' });
+        return sortConfig.direction === 'asc' ? cmp : -cmp;
+    });
 
     return (
         <div className="inventory-container">
@@ -212,18 +259,18 @@ function ProductMatch() {
                     <table className="data-table">
                         <thead>
                             <tr>
-                                <th style={{ width: '100px' }}>SKU</th>
-                                <th>Description</th>
-                                <th style={{ width: '250px' }}>Extracted Name</th>
-                                <th style={{ width: '100px' }}>Colour</th>
-                                <th style={{ width: '100px' }}>Finish</th>
-                                <th style={{ width: '100px' }}>Size</th>
-                                <th>Matched Product</th>
+                                {renderSortHeader('SKU', 'sku', '120px')}
+                                {renderSortHeader('Description', 'sales_description')}
+                                {renderSortHeader('Extracted Name', 'extracted_name', '240px')}
+                                {renderSortHeader('Colour', 'extracted_colour', '110px')}
+                                {renderSortHeader('Finish', 'extracted_finish', '110px')}
+                                {renderSortHeader('Size', 'extracted_size', '110px')}
+                                {renderSortHeader('Matched Product', 'matched_product_name', '200px')}
                                 <th style={{ textAlign: 'center', width: '150px' }}>Actions</th>
                             </tr>
                         </thead>
                         <tbody>
-                            {filteredRecords.map(r => {
+                            {sortedRecords.map(r => {
                                 const draft = drafts[r.product_id] || {};
                                 const eName = draft.extracted_name !== undefined ? draft.extracted_name : (r.extracted_name || '');
                                 const eFinish = draft.extracted_finish !== undefined ? draft.extracted_finish : (r.extracted_finish || '');
@@ -257,7 +304,7 @@ function ProductMatch() {
                                     </tr>
                                 );
                             })}
-                            {filteredRecords.length === 0 && <tr><td colSpan="8" className="empty-state">{search ? 'No matching records found.' : 'No records to match.'}</td></tr>}
+                            {sortedRecords.length === 0 && <tr><td colSpan="8" className="empty-state">{search ? 'No matching records found.' : 'No records to match.'}</td></tr>}
                         </tbody>
                     </table>
                 )}

@@ -1,9 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { X } from 'lucide-react';
 import { getDb } from '../db/Database';
-import { load } from '@tauri-apps/plugin-store';
-import { fetch as tauriFetch } from '@tauri-apps/plugin-http';
-import { fetchProductFeeds } from '../utils/productFeeds';
+import { fetchProductFeeds, buildStPriceUpdateItem, updateStPricesOnline } from '../utils/productFeeds';
+import { normalizeSize } from '../utils/featureExtractor';
+import { extractAutoFillFromMatchedInventory } from '../utils/inventoryAutoFill';
 
 const overlayStyle = {
     position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
@@ -34,11 +34,15 @@ function getInitialProductState() {
         cht_name: '',
         cht_regular_price: '',
         cht_sales_price: '',
+        gto_id: '',
+        gto_product_code: '',
         gto_name: '',
         gto_regular_price: '',
         gto_sales_price: '',
         st_id: '',
         st_name: '',
+        st_finish: '',
+        st_size: '',
         cht_shopify_id: '',
         cht_shopify_name: '',
         cht_shopify_inventory_item_id: ''
@@ -70,24 +74,31 @@ export default function ProductModal({
 
     useEffect(() => {
         if (isOpen) {
+            const initialShopifyCht = (window.productFeeds?.cht || []).filter(i => i.source === 'shopify');
             setStFeedPosts(window.productFeeds?.st || []);
-            setChtFeedItems(window.productFeeds?.cht || []);
+            setChtFeedItems(initialShopifyCht);
             setGtoFeedItems(window.productFeeds?.gto || []);
 
-            // If feeds are not yet loaded, load them
-            if (!window.productFeeds?.cht?.length && !window.productFeeds?.st?.length) {
+            // If any feed is not yet loaded or stale non-Shopify CHT items exist, load/refresh them
+            if (!initialShopifyCht.length || !window.productFeeds?.st?.length || !window.productFeeds?.gto?.length) {
                 fetchProductFeeds().then(feeds => {
                     setStFeedPosts(feeds?.st || []);
-                    setChtFeedItems(feeds?.cht || []);
+                    setChtFeedItems((feeds?.cht || []).filter(i => i.source === 'shopify'));
                     setGtoFeedItems(feeds?.gto || []);
                 });
             }
 
             if (product) {
+                const targetId = product.product_id || product.id;
                 setProductFormData({
-                    id: product.product_id,
                     ...product,
+                    id: targetId,
+                    product_id: targetId,
                     suffix: product.suffix || '',
+                    st_finish: product.st_finish || '',
+                    st_size: product.st_size || '',
+                    gto_id: product.gto_id || '',
+                    gto_product_code: product.gto_product_code || '',
                     cht_shopify_id: product.cht_shopify_id || '',
                     cht_shopify_name: product.cht_shopify_name || '',
                     cht_shopify_inventory_item_id: product.cht_shopify_inventory_item_id || ''
@@ -142,89 +153,84 @@ export default function ProductModal({
                 alert("This product does not have an ST ID mapped.");
                 return;
             }
-            if (!productFormData.finish || !productFormData.size || !productFormData.showtile_price) {
-                alert("Missing finish, size, or showtile_price to update online.");
+            const hasPrice = productFormData.showtile_price !== '' && productFormData.showtile_price !== null && productFormData.showtile_price !== undefined;
+            const hasMatchKeys = (productFormData.finish && productFormData.size) || productFormData.showtile_product_code;
+            if (!hasMatchKeys || !hasPrice) {
+                alert("Missing showtile_price or matching keys (finish & size / showtile_product_code) to update online.");
                 return;
             }
 
-            const store = await load('settings.json', { autoSave: false });
-            const stEndpoint = await store.get('st_endpoint');
-            const stKey = await store.get('st_key');
+            const item = buildStPriceUpdateItem(productFormData);
+            const summary = await updateStPricesOnline([item]);
+            const firstResult = summary.results?.[0];
 
-            if (!stEndpoint || !stKey) {
-                alert("Please configure ST Endpoint and Key in Settings first.");
-                return;
-            }
-
-            const payload = {
-                updates: [
-                    {
-                        product_id: productFormData.st_id.toString(),
-                        finish: productFormData.finish,
-                        size: productFormData.size,
-                        price: productFormData.showtile_price.toString(),
-                        suffix: (productFormData.suffix || '').toString()
-                    }
-                ]
-            };
-
-            const res = await tauriFetch(stEndpoint, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'x-api-key': stKey
-                },
-                body: JSON.stringify(payload)
-            });
-
-            if (res.ok) {
-                const data = await res.json();
-                if (data.results && data.results[0] && data.results[0].status === 'success') {
-                    alert("Price updated online successfully.");
-                } else {
-                    alert("Failed to update price online: " + (data.results?.[0]?.message || 'Unknown error'));
-                }
+            if (summary.successCount > 0) {
+                alert("Price updated online successfully.");
             } else {
-                alert("Failed to update price online. HTTP status: " + res.status);
+                alert("Failed to update price online: " + (firstResult?.message || summary.errors?.[0] || 'Unknown error'));
             }
         } catch (err) {
             console.error("Failed to update online price", err);
-            alert("Error connecting to online API.");
+            alert(err?.message || "Error connecting to online API.");
         }
     };
 
     const handleAutoFillShowtile = async () => {
         try {
             const db = await getDb();
-            const col = collections.find(c => c.collection_id.toString() === productFormData.collection_id.toString());
-            const colName = col ? col.collection_name : '';
-            const color = productFormData.color || colorInput || '';
-            const finish = productFormData.finish || finishInput || '';
-            const size = productFormData.size || '';
+            const targetProductId = productFormData.product_id || productFormData.id || null;
+            const colIdStr = (productFormData.collection_id || '').toString();
+            const col = collections.find(c => c.collection_id.toString() === colIdStr);
+            const colName = (col ? col.collection_name : '').trim();
+            const color = (colorInput || productFormData.color || '').trim();
+            const finish = (finishInput || productFormData.finish || '').trim();
+            const sizeNorm = normalizeSize((productFormData.size || '').trim()).toLowerCase();
 
-            let query = `SELECT * FROM inventory WHERE (backorder IS NULL OR backorder != 1) AND (product_parent_id = $1 OR (lower(extracted_name) = lower($2) AND lower(extracted_colour) = lower($3) AND lower(extracted_finish) = lower($4) AND lower(extracted_size) = lower($5))) ORDER BY product_id DESC LIMIT 1`;
-            let params = [productFormData.id || -1, colName, color, finish, size];
+            let candidates = [];
+            if (targetProductId && colName) {
+                candidates = await db.select(
+                    `SELECT * FROM inventory
+                     WHERE product_parent_id = $1
+                     OR (
+                         lower(trim(COALESCE(extracted_name, ''))) = lower(trim($2))
+                         AND lower(trim(COALESCE(extracted_colour, ''))) = lower(trim($3))
+                         AND lower(trim(COALESCE(extracted_finish, ''))) = lower(trim($4))
+                     )
+                     ORDER BY product_id DESC`,
+                    [targetProductId, colName, color, finish]
+                );
+            } else if (targetProductId) {
+                candidates = await db.select(
+                    `SELECT * FROM inventory WHERE product_parent_id = $1 ORDER BY product_id DESC`,
+                    [targetProductId]
+                );
+            } else if (colName) {
+                candidates = await db.select(
+                    `SELECT * FROM inventory
+                     WHERE lower(trim(COALESCE(extracted_name, ''))) = lower(trim($1))
+                       AND lower(trim(COALESCE(extracted_colour, ''))) = lower(trim($2))
+                       AND lower(trim(COALESCE(extracted_finish, ''))) = lower(trim($3))
+                     ORDER BY product_id DESC`,
+                    [colName, color, finish]
+                );
+            }
 
-            const invs = await db.select(query, params);
-            if (invs && invs.length > 0) {
-                const inv = invs[0];
-                let newShowtileCode = inv.showtile_product_code || '';
-                let newShowtileName = '';
-                if (inv.showtile_name) {
-                    const parts = inv.showtile_name.trim().split(' ');
-                    if (parts.length > 1) {
-                        newShowtileName = parts.slice(1).join(' ');
-                    }
-                }
+            const matched = (candidates || []).filter(row => {
+                if (targetProductId && row.product_parent_id != null && String(row.product_parent_id) === String(targetProductId)) return true;
+                if (!sizeNorm) return true;
+                return normalizeSize(row.extracted_size || '').toLowerCase() === sizeNorm;
+            });
 
+            const extracted = extractAutoFillFromMatchedInventory(matched);
+            if (extracted) {
                 setProductFormData(prev => ({
                     ...prev,
-                    showtile_product_code: newShowtileCode || prev.showtile_product_code,
-                    showtile_name: newShowtileName || prev.showtile_name,
-                    showtile_price: inv.price || prev.showtile_price,
-                    m2_per_box: inv.m2_per_box || prev.m2_per_box,
-                    pcs_per_box: inv.pcs_per_box || prev.pcs_per_box,
-                    box_per_pallet: inv.box_per_pallet || prev.box_per_pallet
+                    showtile_product_code: extracted.showtile_product_code || prev.showtile_product_code,
+                    showtile_name: extracted.showtile_name || prev.showtile_name,
+                    showtile_price: extracted.showtile_price || prev.showtile_price,
+                    m2_per_box: extracted.m2_per_box || prev.m2_per_box,
+                    pcs_per_box: extracted.pcs_per_box || prev.pcs_per_box,
+                    box_per_pallet: extracted.box_per_pallet || prev.box_per_pallet
                 }));
                 alert("Auto-filled from inventory successfully.");
             } else {
@@ -241,16 +247,18 @@ export default function ProductModal({
             const db = await getDb();
             const finalColor = colorInput.trim();
             const finalFinish = finishInput.trim();
+            const targetProductId = productFormData.product_id || productFormData.id;
 
-            if (productFormData.id) {
+            if (targetProductId) {
                 await db.execute(`
                     UPDATE products SET 
                         product_name = $1, product_description = $2, collection_id = $3, shipper_id = $4,
                         color = $5, finish = $6, size = $7, m2_per_box = $8, pcs_per_box = $9, box_per_pallet = $10,
                         showtile_name = $11, showtile_product_code = $12, showtile_price = $13, suffix = $14,
                         cht_name = $15, cht_regular_price = $16, cht_sales_price = $17, gto_name = $18, gto_regular_price = $19, gto_sales_price = $20, st_id = $21, st_name = $22,
-                        cht_shopify_id = $23, cht_shopify_name = $24, cht_shopify_inventory_item_id = $25
-                    WHERE product_id = $26
+                        cht_shopify_id = $23, cht_shopify_name = $24, cht_shopify_inventory_item_id = $25,
+                        st_finish = $26, st_size = $27, gto_id = $28, gto_product_code = $29
+                    WHERE product_id = $30
                 `, [
                     productFormData.product_name, productFormData.product_description, productFormData.collection_id, productFormData.shipper_id || null,
                     finalColor, finalFinish, productFormData.size,
@@ -259,7 +267,9 @@ export default function ProductModal({
                     productFormData.cht_name, productFormData.cht_regular_price || null, productFormData.cht_sales_price || null, productFormData.gto_name, productFormData.gto_regular_price || null, productFormData.gto_sales_price || null,
                     productFormData.st_id, productFormData.st_name,
                     productFormData.cht_shopify_id || null, productFormData.cht_shopify_name || null, productFormData.cht_shopify_inventory_item_id || null,
-                    productFormData.id
+                    productFormData.st_finish || null, productFormData.st_size || null,
+                    productFormData.gto_id || null, productFormData.gto_product_code || null,
+                    targetProductId
                 ]);
             } else {
                 await db.execute(`
@@ -268,8 +278,9 @@ export default function ProductModal({
                         color, finish, size, m2_per_box, pcs_per_box, box_per_pallet,
                         showtile_name, showtile_product_code, showtile_price, suffix,
                         cht_name, cht_regular_price, cht_sales_price, gto_name, gto_regular_price, gto_sales_price, st_id, st_name,
-                        cht_shopify_id, cht_shopify_name, cht_shopify_inventory_item_id
-                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25)
+                        cht_shopify_id, cht_shopify_name, cht_shopify_inventory_item_id,
+                        st_finish, st_size, gto_id, gto_product_code
+                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29)
                 `, [
                     productFormData.product_name, productFormData.product_description, productFormData.collection_id, productFormData.shipper_id || null,
                     finalColor, finalFinish, productFormData.size,
@@ -277,7 +288,9 @@ export default function ProductModal({
                     productFormData.showtile_name, productFormData.showtile_product_code, productFormData.showtile_price || null, productFormData.suffix || null,
                     productFormData.cht_name, productFormData.cht_regular_price || null, productFormData.cht_sales_price || null, productFormData.gto_name, productFormData.gto_regular_price || null, productFormData.gto_sales_price || null,
                     productFormData.st_id, productFormData.st_name,
-                    productFormData.cht_shopify_id || null, productFormData.cht_shopify_name || null, productFormData.cht_shopify_inventory_item_id || null
+                    productFormData.cht_shopify_id || null, productFormData.cht_shopify_name || null, productFormData.cht_shopify_inventory_item_id || null,
+                    productFormData.st_finish || null, productFormData.st_size || null,
+                    productFormData.gto_id || null, productFormData.gto_product_code || null
                 ]);
             }
 
@@ -560,11 +573,33 @@ export default function ProductModal({
                                         </div>
                                     )}
                                 </div>
+                                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px', marginTop: '16px' }}>
+                                    <div className="form-group" style={{ margin: 0 }}>
+                                        <label style={{ display: 'block', marginBottom: '6px', fontSize: '0.85rem', color: '#475569' }}>ST Finish</label>
+                                        <input
+                                            type="text"
+                                            className="form-control"
+                                            value={productFormData.st_finish || ''}
+                                            onChange={e => setProductFormData({ ...productFormData, st_finish: e.target.value })}
+                                            style={{ width: '100%', padding: '6px 10px', border: '1px solid #cbd5e1', borderRadius: '4px' }}
+                                        />
+                                    </div>
+                                    <div className="form-group" style={{ margin: 0 }}>
+                                        <label style={{ display: 'block', marginBottom: '6px', fontSize: '0.85rem', color: '#475569' }}>ST Size</label>
+                                        <input
+                                            type="text"
+                                            className="form-control"
+                                            value={productFormData.st_size || ''}
+                                            onChange={e => setProductFormData({ ...productFormData, st_size: e.target.value })}
+                                            style={{ width: '100%', padding: '6px 10px', border: '1px solid #cbd5e1', borderRadius: '4px' }}
+                                        />
+                                    </div>
+                                </div>
                             </div>
 
                             <div style={{ background: '#f8fafc', padding: '20px', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
                                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
-                                    <h3 style={{ margin: 0, fontSize: '1rem', color: '#0f172a' }}>CHT Website Binding</h3>
+                                    <h3 style={{ margin: 0, fontSize: '1rem', color: '#0f172a' }}>CHT Website Binding(Shopify)</h3>
                                     {productFormData.cht_shopify_id && (
                                         <span style={{ fontSize: '0.75rem', color: '#10b981', background: '#ecfdf5', padding: '2px 8px', borderRadius: '4px', border: '1px solid #a7f3d0' }}>
                                             Bound ID: {productFormData.cht_shopify_id}
@@ -628,7 +663,14 @@ export default function ProductModal({
                             </div>
 
                             <div style={{ background: '#f8fafc', padding: '20px', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
-                                <h3 style={{ margin: '0 0 16px 0', fontSize: '1rem', color: '#0f172a' }}>GTO Website Binding</h3>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+                                    <h3 style={{ margin: 0, fontSize: '1rem', color: '#0f172a' }}>GTO Website Binding</h3>
+                                    {productFormData.gto_id && (
+                                        <span style={{ fontSize: '0.75rem', color: '#10b981', background: '#ecfdf5', padding: '2px 8px', borderRadius: '4px', border: '1px solid #a7f3d0' }}>
+                                            Bound ID: {productFormData.gto_id}
+                                        </span>
+                                    )}
+                                </div>
                                 <div className="form-group" style={{ margin: 0, position: 'relative' }}>
                                     <label style={{ display: 'block', marginBottom: '6px', fontSize: '0.85rem', color: '#475569' }}>GTO Name</label>
                                     <input
@@ -636,7 +678,7 @@ export default function ProductModal({
                                         className="form-control"
                                         value={productFormData.gto_name || ''}
                                         onChange={e => {
-                                            setProductFormData({ ...productFormData, gto_name: e.target.value });
+                                            setProductFormData({ ...productFormData, gto_name: e.target.value, gto_id: null });
                                             setShowGtoSuggestions(true);
                                         }}
                                         onFocus={() => setShowGtoSuggestions(true)}
@@ -645,12 +687,17 @@ export default function ProductModal({
                                     />
                                     {showGtoSuggestions && gtoFeedItems.length > 0 && (
                                         <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, background: 'white', border: '1px solid #cbd5e1', borderRadius: '4px', marginTop: '4px', zIndex: 10, maxHeight: '200px', overflowY: 'auto', boxShadow: '0 4px 6px -1px rgba(0,0,0,0.1)' }}>
-                                            {gtoFeedItems.filter(p => p.name.toLowerCase().includes((productFormData.gto_name || '').toLowerCase())).map(p => (
+                                            {gtoFeedItems.filter(p => (p.name || '').toLowerCase().includes((productFormData.gto_name || '').toLowerCase())).map(p => (
                                                 <div
                                                     key={p.id}
                                                     style={{ padding: '8px 12px', cursor: 'pointer', borderBottom: '1px solid #f1f5f9', fontSize: '0.9rem' }}
                                                     onMouseDown={() => {
-                                                        setProductFormData({ ...productFormData, gto_name: p.name });
+                                                        setProductFormData(prev => ({
+                                                            ...prev,
+                                                            gto_name: p.name,
+                                                            gto_id: p.id ? String(p.id) : null,
+                                                            gto_product_code: p.parsedCode || prev.gto_product_code || null
+                                                        }));
                                                         setShowGtoSuggestions(false);
                                                     }}
                                                 >

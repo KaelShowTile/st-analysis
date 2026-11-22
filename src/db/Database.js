@@ -95,6 +95,10 @@ export const getDb = async () => {
                 
                 const dbProxy = {
                     select: async (query, args = []) => {
+                        if (/^\s*(INSERT|UPDATE|DELETE|REPLACE)\b/i.test(query)) {
+                            console.error("[Database] CRITICAL WARNING: Mutating query called via db.select() instead of db.execute()! It will NOT be queued into offline_queue for Turso sync:", query);
+                            queryCache.clear();
+                        }
                         const safeQuery = query.replace(/\$\d+/g, '?');
                         const cacheKey = safeQuery + '|' + JSON.stringify(args);
 
@@ -167,6 +171,10 @@ export const getDb = async () => {
                 
                 const dbProxy = {
                     select: async (query, args = []) => {
+                        if (/^\s*(INSERT|UPDATE|DELETE|REPLACE)\b/i.test(query)) {
+                            console.error("[Database] CRITICAL WARNING: Mutating query called via db.select() instead of db.execute()! It will NOT be queued into offline_queue for Turso sync:", query);
+                            queryCache.clear();
+                        }
                         const safeQuery = query.replace(/\$\d+/g, '?');
                         const cacheKey = safeQuery + '|' + JSON.stringify(args);
 
@@ -214,6 +222,9 @@ export const getDb = async () => {
                 try { await dbProxy.execute('ALTER TABLE containers ADD COLUMN balance TEXT'); } catch(e) {}
                 try { await dbProxy.execute('ALTER TABLE containers ADD COLUMN payment_date TEXT'); } catch(e) {}
                 try { await dbProxy.execute('ALTER TABLE reports ADD COLUMN ignore INTEGER DEFAULT 0'); } catch(e) {}
+                try { await dbProxy.execute('ALTER TABLE collections ADD COLUMN collection_description TEXT'); } catch(e) {}
+                try { await dbProxy.execute('ALTER TABLE products ADD COLUMN st_finish TEXT'); } catch(e) {}
+                try { await dbProxy.execute('ALTER TABLE products ADD COLUMN st_size TEXT'); } catch(e) {}
                 
                 console.log('SQLite Database initialized successfully.');
                 return dbProxy;
@@ -275,9 +286,11 @@ const initializeTables = async (db) => {
         CREATE TABLE IF NOT EXISTS collections (
             collection_id INTEGER PRIMARY KEY AUTOINCREMENT,
             collection_name TEXT,
-            shipper_id INTEGER
+            shipper_id INTEGER,
+            collection_description TEXT
         )
     `);
+    try { await db.execute("ALTER TABLE collections ADD COLUMN collection_description TEXT"); } catch (e) { }
 
     await db.execute(`
         CREATE TABLE IF NOT EXISTS products (
@@ -311,7 +324,9 @@ const initializeTables = async (db) => {
             suffix TEXT,
             cht_shopify_id TEXT,
             cht_shopify_name TEXT,
-            cht_shopify_inventory_item_id TEXT
+            cht_shopify_inventory_item_id TEXT,
+            st_finish TEXT,
+            st_size TEXT
         )
     `);
 
@@ -321,6 +336,8 @@ const initializeTables = async (db) => {
     try { await db.execute("ALTER TABLE products ADD COLUMN cht_shopify_id TEXT"); } catch (e) { }
     try { await db.execute("ALTER TABLE products ADD COLUMN cht_shopify_name TEXT"); } catch (e) { }
     try { await db.execute("ALTER TABLE products ADD COLUMN cht_shopify_inventory_item_id TEXT"); } catch (e) { }
+    try { await db.execute("ALTER TABLE products ADD COLUMN st_finish TEXT"); } catch (e) { }
+    try { await db.execute("ALTER TABLE products ADD COLUMN st_size TEXT"); } catch (e) { }
 
     await db.execute(`
         CREATE TABLE IF NOT EXISTS attributes (
